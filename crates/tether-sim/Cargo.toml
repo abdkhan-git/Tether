@@ -1,0 +1,10 @@
+[package]
+name = "tether-sim"
+description = "Deterministic simulation of many Tether devices under faults"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tether-core.workspace = true

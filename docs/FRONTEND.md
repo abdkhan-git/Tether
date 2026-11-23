@@ -1,0 +1,84 @@
+# Tether frontend
+
+The desktop UI lives in [`app/`](../app): React 19 + TypeScript + Tailwind v4 + Motion. It is the UI half of the Tauri 2 app described in [DESIGN.md](DESIGN.md). Today it runs in a browser against preview data; the Tauri shell and the daemon client come next.
+
+```sh
+cd app
+npm install
+npm run dev        # http://localhost:1420
+npm run build      # typecheck + production build
+```
+
+## Design language
+
+The aim is a premium, calm desktop app in the spirit of modern Apple software, and at home on Windows, where the owner works.
+
+| Aspect | Decision |
+| --- | --- |
+| Palette | Warm obsidian (`#08080a`) with a champagne accent (`#dcbc82`) in dark mode; ivory and bronze in light. Soft green is reserved for "connected", coral for destructive actions. No purple or blue. |
+| Depth | Surfaces step up from background to surface to glass, separated by hairlines. A faint warm ambient light and film grain sit behind everything (`body::before` / `::after` in `index.css`). |
+| Type | Geist for interface text, Cormorant Garamond for page titles and large figures (lining numerals), IBM Plex Mono for IDs, speeds and code. Same families as the portfolio. |
+| Navigation | A floating glass pill bar across the top (React Bits `PillNav`). There is no sidebar. |
+| Pages | Editorial header on each: small accent eyebrow, large serif title, one-line subtitle, at most one hero action. |
+| Icons | Hugeicons (`@hugeicons/core-free-icons`), 1.5 px stroke, all named in `components/Icon.tsx`. |
+| Motion | Springs everywhere (around `duration: 0.5, bounce: 0.15`). Pages cross-fade with a slight blur; lists animate by layout; selection highlights glide. Respects `prefers-reduced-motion`. |
+
+Tokens are in `app/src/index.css`. Libraries that need hex values (shaders, contrast maths) read them from `palette` in `app/src/components/ui.tsx`; keep the two in step.
+
+## Platform awareness
+
+`app/src/lib/platform.ts` detects the OS and the UI follows it:
+
+- **Search:** a field in the title bar that opens a results flyout below it, as in Windows 11. It is focused with `Ctrl+F` (`⌘F` on a Mac) or `/`. There is no Mac-style command palette.
+- **Wording:** "Copy to this PC", "Show in File Explorer"; on macOS, "this Mac" and "Finder".
+- **Notifications:** bottom-right, where Windows shows its own.
+- **This device:** its icon and default name follow the detected OS.
+
+Inside Tauri, the OS plugin can replace the user-agent sniffing.
+
+## Component libraries
+
+Polished interaction components are vendored from React Bits and Magic UI into `app/src/components/rb` and `app/src/components/magic`. See [VENDORED.md](../app/src/components/VENDORED.md) for what each one does, where it came from and its licence. React Bits is MIT + Commons Clause: fine to ship inside Tether, not to resell on its own.
+
+Pages use the wrappers in `components/ui.tsx` (`Card`, `PrimaryAction`, `IconButton`, `Segmented`, `Switch`, `Figure`, ...) rather than the vendored files directly, so the look stays consistent and the vendored code can be refreshed from upstream.
+
+## Adding a feature (module)
+
+Tether is a set of modules on one synced core. The top navigation, the search flyout and the Modules page are all generated from a registry, so a new feature touches three places:
+
+1. **Operation type.** Add the variant to `OpKind` in `crates/tether-core/src/op.rs`, with its merge rule, and extend the simulator's invariants (CLAUDE.md: every sync change keeps the simulator green).
+2. **Module file.** Create `app/src/modules/<name>.tsx` exporting a `TetherModule`:
+
+   ```tsx
+   export const vaultModule: TetherModule = {
+     id: "vault",
+     label: "Vault",
+     icon: icons.key,               // from components/Icon.tsx
+     group: "Sync",
+     summary: "One line for the Modules page and search.",
+     status: "preview",             // stable | preview | planned
+     view: VaultView,               // starts with <PageHeader eyebrow title subtitle />
+     commands: () => [...],         // optional search-flyout actions
+   };
+   ```
+
+3. **Registry.** Add it to `liveModules` in `app/src/modules/registry.ts`, and delete its entry from `planned.ts` if it was listed there.
+
+Users can turn any non-core module off from the Modules page (the grid button in the title bar); the choice is stored locally.
+
+### Planned modules
+
+`app/src/modules/planned.ts` lists features that are designed but not built. Spaces is on the roadmap (Stage 5). Vault, Drop folders and Remote actions are **proposals**: they are not in DESIGN.md yet and each needs a design pass. Remote actions in particular needs a threat model, since it lets one device trigger behaviour on another.
+
+## Data layer
+
+`app/src/data/store.ts` is a zustand store of devices, clips, transfers, workspaces and log operations. `startMockDaemon()` simulates peers copying text, transfer progress and latency jitter. Every figure on screen is preview data until the daemon is connected, and the UI says so where it matters (pairing, workspaces).
+
+To connect the daemon, replace the mock actions with Tauri commands and feed daemon events into the same store. Types in `app/src/data/types.ts` mirror `tether-core` (`OpRow` is `(device, seq, ts, kind)`).
+
+## Known gaps
+
+- No Tauri shell yet (window chrome, tray, Mica/vibrancy, global hotkey). The title bar already carries `data-tauri-drag-region`.
+- Pairing, file transfer and workspace capture are UI only; the daemon does not implement them yet.
+- The JS bundle is about 205 KB gzipped. That's fine for a local app, but worth code-splitting per module if it grows.
+- No automated UI tests yet.

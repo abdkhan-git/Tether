@@ -1,0 +1,102 @@
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  Add01Icon,
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  BrowserIcon,
+  Cancel01Icon,
+  ClipboardIcon,
+  CodeIcon,
+  ComputerIcon,
+  Copy01Icon,
+  Delete02Icon,
+  File01Icon,
+  Folder01Icon,
+  Globe02Icon,
+  Key01Icon,
+  LaptopIcon,
+  Link01Icon,
+  LockIcon,
+  Moon02Icon,
+  PauseIcon,
+  PinIcon,
+  PinOffIcon,
+  PlayIcon,
+  Pulse01Icon,
+  Search01Icon,
+  SendIcon,
+  ShieldBanIcon,
+  Sun03Icon,
+  TerminalIcon,
+  Tick02Icon,
+  Upload01Icon,
+  ViewOffIcon,
+  Wifi01Icon,
+  WifiDisconnected01Icon,
+  FlashIcon,
+  FolderSyncIcon,
+  UserMultiple02Icon,
+  GridViewIcon,
+  Home01Icon,
+  PencilEdit01Icon,
+} from "@hugeicons/core-free-icons";
+import type { Connection, Platform } from "@/data/types";
+
+/** One place that names every icon the app uses (Hugeicons, 1.5px stroke). */
+export const icons = {
+  add: Add01Icon,
+  chevronDown: ArrowDown01Icon,
+  chevronRight: ArrowRight01Icon,
+  browser: BrowserIcon,
+  close: Cancel01Icon,
+  clipboard: ClipboardIcon,
+  code: CodeIcon,
+  copy: Copy01Icon,
+  trash: Delete02Icon,
+  file: File01Icon,
+  folder: Folder01Icon,
+  globe: Globe02Icon,
+  key: Key01Icon,
+  link: Link01Icon,
+  lock: LockIcon,
+  moon: Moon02Icon,
+  pause: PauseIcon,
+  pin: PinIcon,
+  pinOff: PinOffIcon,
+  play: PlayIcon,
+  pulse: Pulse01Icon,
+  search: Search01Icon,
+  send: SendIcon,
+  revoke: ShieldBanIcon,
+  sun: Sun03Icon,
+  tick: Tick02Icon,
+  upload: Upload01Icon,
+  hide: ViewOffIcon,
+  wifi: Wifi01Icon,
+  offline: WifiDisconnected01Icon,
+  flash: FlashIcon,
+  folderSync: FolderSyncIcon,
+  people: UserMultiple02Icon,
+  grid: GridViewIcon,
+  home: Home01Icon,
+  edit: PencilEdit01Icon,
+} as const;
+
+export const platformGlyph: Record<Platform, typeof ComputerIcon> = {
+  windows: ComputerIcon,
+  macos: LaptopIcon,
+  linux: TerminalIcon,
+};
+
+export const connectionGlyph: Record<Connection, typeof Wifi01Icon> = {
+  lan: Wifi01Icon,
+  direct: Globe02Icon,
+  relay: Pulse01Icon,
+  offline: WifiDisconnected01Icon,
+};
+
+export type IconData = (typeof icons)[keyof typeof icons];
+
+export function Icon({ icon, size = 16, stroke = 1.5, className }: { icon: IconData; size?: number; stroke?: number; className?: string }) {
+  return <HugeiconsIcon icon={icon} size={size} strokeWidth={stroke} className={className} aria-hidden />;
+}
