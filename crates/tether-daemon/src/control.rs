@@ -18,6 +18,7 @@ commands:
   /join CODE [ADDR]      pair with a device showing CODE (ADDR = ip:port if it isn't found nearby)
   /peers                 list the devices in this group
   /revoke ID             remove a device (first characters of its id are enough)
+  /pause, /resume        stop or restart syncing this device's clipboard
   /whoami                show this device's id and group
   /help                  this list";
 
@@ -84,6 +85,8 @@ pub async fn handle(ctx: &Ctx, endpoint: &Endpoint, line: &str) {
                 Ok(format!("revoked {d}; its future operations will be rejected by every device"))
             }),
         },
+        "/pause" => api::set_paused(ctx, true).map(|_| "sync paused: copies stay on this device".to_string()),
+        "/resume" => api::set_paused(ctx, false).map(|_| "sync resumed".to_string()),
         "" => return,
         other => Err(anyhow!("unknown command {other}; try /help")),
     };

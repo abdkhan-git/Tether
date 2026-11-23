@@ -178,6 +178,56 @@ async fn two_daemons_pair_sync_and_revoke_through_the_channel() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_paused_device_sends_nothing_and_applies_nothing_until_resumed() {
+    let (mut a, ctl_a) = Daemon::with_control("alpha");
+    let (mut b, ctl_b) = Daemon::with_control("bravo");
+    common::pair(&mut b, &mut a);
+    let (mut ca, mut cb) = (client(&ctl_a).await, client(&ctl_b).await);
+    let mut events = client(&ctl_a).await.subscribe().await.unwrap();
+
+    // The device list carries the measured round trip and the op count.
+    let b_id: DeviceId = b.id.parse().unwrap();
+    let peer = devices(&mut ca).await.into_iter().find(|d| d.id == b_id).expect("B is listed");
+    assert_eq!(peer.state, DeviceState::Connected);
+    assert!(peer.rtt_us.is_some_and(|us| us > 0), "connected peers report a round trip: {peer:?}");
+    assert!(peer.ops >= 1, "B authored at least its pairing op: {peer:?}");
+
+    assert_eq!(ca.request(&Request::SetPaused { paused: true }).await.unwrap(), Reply::Paused(true));
+    assert_eq!(next_matching(&mut events, |e| matches!(e, Event::Paused(_))).await, Event::Paused(true));
+    let Reply::Status(s) = ca.request(&Request::Status).await.unwrap() else { panic!("no status") };
+    assert!(s.paused);
+
+    // Copied on A while paused: not recorded, so B never sees it.
+    a.send("typed on A while paused");
+    // Copied on B: arrives in A's history, but is not applied to A's clipboard.
+    let m = a.mark();
+    b.send("from B while A is paused");
+    next_matching(&mut events, |e| matches!(e, Event::Clipboard(i) if i.text == "from B while A is paused")).await;
+    common::settle();
+    assert!(!a.since(m).contains("<< from B"), "applied while paused:\n{}", a.since(m));
+    let texts = |items: Vec<HistoryItem>| items.into_iter().map(|i| i.text).collect::<Vec<_>>();
+    assert!(!texts(history(&mut ca, 100).await).contains(&"typed on A while paused".to_string()));
+    assert!(!texts(history(&mut cb, 100).await).contains(&"typed on A while paused".to_string()));
+
+    // Resumed: B's next copy is applied again, and A's copies sync.
+    assert_eq!(ca.request(&Request::SetPaused { paused: false }).await.unwrap(), Reply::Paused(false));
+    let m = a.mark();
+    b.send("after resuming");
+    a.wait_for("<< after resuming", m).expect("applied after resuming");
+    a.send("typed on A after resuming");
+    assert!(texts(wait_for_history(&mut cb, 3).await).contains(&"typed on A after resuming".to_string()));
+}
+
+#[test]
+fn a_managed_daemon_stops_cleanly_when_its_app_goes_away() {
+    let (mut d, _ctl) = Daemon::managed("alpha");
+    let m = d.mark();
+    let status = d.close_stdin_and_wait(Duration::from_secs(10)).expect("exits once stdin closes");
+    assert!(status.success(), "clean exit: {status:?}\n{}", d.since(0));
+    assert!(d.since(m).contains("shutting down"), "{}", d.since(m));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn history_pages_without_gaps_or_repeats() {
     let (mut d, ctl) = Daemon::with_control("alpha");
     let mut c = client(&ctl).await;

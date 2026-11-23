@@ -18,7 +18,7 @@ use tether_ipc::{Endpoint, Token};
 
 pub struct Daemon {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     out: Arc<Mutex<String>>,
     pub port: u16,
     pub id: String,
@@ -102,6 +102,20 @@ impl Daemon {
         (d, Control { profile, endpoint, token })
     }
 
+    /// Start a daemon as the desktop app does (`--managed`, which rules out
+    /// `--stdin`), with its control channel open. It watches the system
+    /// clipboard (read only; no peer ever writes to it in these tests). On a
+    /// machine with no clipboard it logs an error and runs on.
+    pub fn managed(name: &str) -> (Self, Control) {
+        let profile = unique_profile(name);
+        let token = Token::generate().unwrap();
+        let mut cmd = build(name, Opts { stdin: false, ..Opts::default() }, &["--managed", "--profile", &profile]);
+        cmd.env(tether_ipc::token::TOKEN_ENV, token.to_hex().as_str());
+        let d = Self::spawn(cmd);
+        let endpoint = Endpoint::for_profile(&profile).unwrap();
+        (d, Control { profile, endpoint, token })
+    }
+
     /// Run a daemon that is expected to exit (for example, refused at startup).
     pub fn run_to_exit(name: &str, extra: &[&str], token: &Token) -> Output {
         let mut cmd = command(name, extra);
@@ -140,7 +154,7 @@ impl Daemon {
                 }
             });
         }
-        let stdin = child.stdin.take().unwrap();
+        let stdin = child.stdin.take();
         let mut d = Daemon { child, stdin, out, port: 0, id: String::new() };
         let started = d.wait_for("tetherd started", 0).unwrap_or_else(|| panic!("daemon starts:\n{}", d.since(0)));
         d.port = field(&started, "port=").parse().expect("port");
@@ -149,8 +163,23 @@ impl Daemon {
     }
 
     pub fn send(&mut self, line: &str) {
-        writeln!(self.stdin, "{line}").unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin is open");
+        writeln!(stdin, "{line}").unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// Close the daemon's stdin, as an app that quits or crashes does, and
+    /// wait up to `limit` for it to exit.
+    pub fn close_stdin_and_wait(&mut self, limit: Duration) -> Option<std::process::ExitStatus> {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return Some(status);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
     }
 
     pub fn mark(&self) -> usize {

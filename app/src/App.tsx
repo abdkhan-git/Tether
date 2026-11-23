@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { inDesktopApp } from "@/data/daemon";
 import { useTether } from "@/data/store";
-import { liveModules } from "@/modules/registry";
+import { useUsableModules } from "@/modules/registry";
 import { modulesPageModule } from "@/modules/modules-page";
+import { LinkBanner } from "@/components/LinkBanner";
 import { PairDialog } from "@/components/PairDialog";
 import { Toasts } from "@/components/Toasts";
 import { TopBar } from "@/components/TopBar";
@@ -13,9 +15,12 @@ export default function App() {
   const disabled = useTether((s) => s.disabledModules);
   const theme = useTether((s) => s.theme);
   const setActive = useTether((s) => s.setActiveModule);
+  const modules = useUsableModules();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    // Match the native title bar to the app's appearance.
+    if (inDesktopApp) void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setTheme(theme).catch(() => {}));
   }, [theme]);
 
   // Follow the URL hash, so deep links and back/forward work.
@@ -29,7 +34,7 @@ export default function App() {
   }, [setActive]);
 
   // If the open module gets switched off, fall back to the overview.
-  const active = [...liveModules, modulesPageModule].find((m) => m.id === activeId);
+  const active = [...modules, modulesPageModule].find((m) => m.id === activeId);
   const usable = !!active && (active.id === "modules" || !disabled.includes(active.id));
   useEffect(() => {
     if (!usable) setActive("overview");
@@ -42,6 +47,7 @@ export default function App() {
       <WarmTooltipGroup>
         <div className="flex h-full flex-col">
           <TopBar />
+          <LinkBanner />
           <main className="relative min-h-0 flex-1">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div

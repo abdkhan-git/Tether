@@ -3,20 +3,20 @@ import { cn } from "@/lib/cn";
 import { Icon, icons } from "@/components/Icon";
 import { Card, Chip, PageHeader, Panel, SectionLabel, Switch } from "@/components/ui";
 import { plannedModules } from "./planned";
-import { liveModules } from "./registry";
+import { liveModules, useUsableModules } from "./registry";
 import type { TetherModule } from "./types";
 
-function Row({ m, enabled, onToggle }: { m: TetherModule; enabled?: boolean; onToggle?: () => void }) {
+function Row({ m, enabled, onToggle, coming }: { m: TetherModule; enabled?: boolean; onToggle?: () => void; coming?: boolean }) {
   return (
-    <div className={cn("flex items-center gap-4 px-5 py-4", m.status === "planned" && "opacity-75")}>
+    <div className={cn("flex items-center gap-4 px-5 py-4", coming && "opacity-75")}>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <Icon icon={m.icon} size={18} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[14.5px] font-medium">{m.label}</span>
-          {m.status === "preview" && <Chip>Preview</Chip>}
-          {m.status === "planned" && <Chip>{m.note}</Chip>}
+          {!coming && m.status === "preview" && <Chip>Preview</Chip>}
+          {coming && m.note && <Chip>{m.note}</Chip>}
         </div>
         <p className="mt-0.5 text-[13px] text-muted-foreground">{m.summary}</p>
       </div>
@@ -27,6 +27,9 @@ function Row({ m, enabled, onToggle }: { m: TetherModule; enabled?: boolean; onT
 
 function ModulesView() {
   const { disabledModules, toggleModule } = useTether();
+  const usable = useUsableModules();
+  // Built in the UI, but the daemon does not do them yet: listed as coming.
+  const notYet = liveModules.filter((m) => !usable.includes(m));
   return (
     <div>
       <PageHeader eyebrow="Modules" title="Make it yours." subtitle="Tether is a set of features on one synced, encrypted core. Turn on what you use; new modules arrive here." />
@@ -34,7 +37,7 @@ function ModulesView() {
         <section>
           <SectionLabel>Installed</SectionLabel>
           <Panel className="divide-y divide-border">
-            {liveModules.map((m) => (
+            {usable.map((m) => (
               <Row key={m.id} m={m} enabled={!disabledModules.includes(m.id)} onToggle={() => toggleModule(m.id)} />
             ))}
           </Panel>
@@ -42,8 +45,8 @@ function ModulesView() {
         <section>
           <SectionLabel>Coming</SectionLabel>
           <Panel className="divide-y divide-border">
-            {plannedModules.map((m) => (
-              <Row key={m.id} m={m} />
+            {[...notYet, ...plannedModules].map((m) => (
+              <Row key={m.id} m={m} coming />
             ))}
           </Panel>
           <Card pad={22} className="mt-4">
@@ -65,5 +68,6 @@ export const modulesPageModule: TetherModule = {
   summary: "Turn features on and off.",
   status: "stable",
   core: true,
+  daemon: true,
   view: ModulesView,
 };

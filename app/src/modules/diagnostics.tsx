@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTether } from "@/data/store";
+import { opsOf } from "@/data/map";
 import type { Device } from "@/data/types";
 import { median, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -61,13 +62,18 @@ function Tile({ label, value, decimals = 0, suffix, hint }: { label: string; val
 }
 
 function DiagnosticsView() {
-  const { devices, ops } = useTether();
+  const { devices, ops: previewOps, clips, backend } = useTether();
+  const live = backend.live;
   const history = useLatencyHistory(devices);
   const byId = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices]);
   const peers = devices.filter((d) => !d.isMe);
   const online = peers.filter((d) => d.connection !== "offline");
-  const rtt = median(online.map((d) => d.latencyMs ?? 0));
-  const behind = devices.reduce((n, o) => n + devices.reduce((m, a) => m + lag(o, a), 0), 0);
+  const rtt = median(online.flatMap((d) => (d.latencyMs === null ? [] : [d.latencyMs])));
+  // The daemon reports only this device's version vector; the preview models everyone's.
+  const behind = live ? 0 : devices.reduce((n, o) => n + devices.reduce((m, a) => m + lag(o, a), 0), 0);
+  const held = devices.reduce((n, d) => n + d.seq, 0);
+  const observers = live ? devices.filter((d) => d.isMe) : devices;
+  const ops = useMemo(() => (live ? opsOf(clips) : previewOps), [live, clips, previewOps]);
 
   return (
     <div>
@@ -75,8 +81,12 @@ function DiagnosticsView() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Tile label="Peers online" value={online.length} suffix={`of ${peers.length}`} hint="Paired and reachable" />
-        <Tile label="Median latency" value={rtt} decimals={1} suffix="ms" hint="Round trip to peers" />
-        <Tile label="Replication lag" value={behind} suffix="ops" hint={behind ? "Offline devices will catch up" : "Everyone is current"} />
+        <Tile label="Median latency" value={rtt} decimals={1} suffix="ms" hint={live ? "QUIC round trip to connected peers" : "Round trip to peers"} />
+        {live ? (
+          <Tile label="Operations held" value={held} suffix="ops" hint="Signed and verified, from every author" />
+        ) : (
+          <Tile label="Replication lag" value={behind} suffix="ops" hint={behind ? "Offline devices will catch up" : "Everyone is current"} />
+        )}
         <Tile label="Simulator" value={10000} suffix="seeds" hint="Last run: 0 invariant violations" />
       </div>
 
@@ -112,11 +122,11 @@ function DiagnosticsView() {
               </tr>
             </thead>
             <tbody>
-              {devices.map((o) => (
+              {observers.map((o) => (
                 <tr key={o.id} className="border-t border-border">
                   <td className="px-5 py-3.5 font-medium">{o.name}</td>
                   {devices.map((a) => {
-                    const l = lag(o, a);
+                    const l = live ? 0 : lag(o, a);
                     return (
                       <td key={a.id} className={cn("px-4 py-3.5 font-mono text-xs", l ? "text-muted-foreground" : "text-foreground")}>
                         {a.seq - l}
@@ -129,7 +139,10 @@ function DiagnosticsView() {
             </tbody>
           </table>
         </Panel>
-        <p className="mt-3 px-1 text-xs text-subtle">Each cell is the highest sequence number a device holds from an author. Peers swap these on connect and send only what is missing.</p>
+        <p className="mt-3 px-1 text-xs text-subtle">
+          Each cell is the highest sequence number a device holds from an author. Peers swap these on connect and send only what is missing.
+          {live && " Only this device's row is shown: other devices' vectors are not reported to the app yet."}
+        </p>
       </section>
 
       <section className="mt-12">
@@ -168,5 +181,6 @@ export const diagnosticsModule: TetherModule = {
   group: "Network",
   summary: "Live latency, version vectors and the replicated operation log.",
   status: "preview",
+  daemon: true,
   view: DiagnosticsView,
 };

@@ -7,7 +7,7 @@ import SquishSwitch from "./rb/SquishSwitch";
 import RubberSegment from "./rb/RubberSegment";
 import WarmTooltip, { WarmTooltipGroup } from "./rb/WarmTooltip";
 import { NumberTicker } from "./magic/number-ticker";
-import { Icon, connectionGlyph, icons, platformGlyph } from "./Icon";
+import { Icon, connectionGlyph, icons, platformGlyph, unknownDeviceGlyph } from "./Icon";
 
 export { WarmTooltipGroup };
 
@@ -196,13 +196,13 @@ export function ConnectionBadge({ connection }: { connection: Connection }) {
   );
 }
 
-export function DeviceGlyph({ platform, size = 40, online = true }: { platform: Platform; size?: number; online?: boolean }) {
+export function DeviceGlyph({ platform, size = 40, online = true }: { platform: Platform | null; size?: number; online?: boolean }) {
   return (
     <span
       className={cn("inline-flex shrink-0 items-center justify-center rounded-full border border-border bg-surface-2", online ? "text-foreground" : "text-subtle")}
       style={{ width: size, height: size }}
     >
-      <Icon icon={platformGlyph[platform]} size={Math.round(size * 0.46)} />
+      <Icon icon={platform ? platformGlyph[platform] : unknownDeviceGlyph} size={Math.round(size * 0.46)} />
     </span>
   );
 }

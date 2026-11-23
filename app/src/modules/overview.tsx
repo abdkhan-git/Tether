@@ -1,13 +1,13 @@
 import { useMemo, useRef, type RefObject } from "react";
 import { motion } from "motion/react";
 import { useTether } from "@/data/store";
-import type { Device } from "@/data/types";
+import { newestFirst, type Device } from "@/data/types";
 import { bytes, median, rate, timeAgo } from "@/lib/format";
 import { contentOf } from "@/lib/content/detect";
 import { cn } from "@/lib/cn";
 import { AnimatedBeam } from "@/components/magic/animated-beam";
 import { icons } from "@/components/Icon";
-import { Card, DeviceGlyph, Figure, IconButton, Panel, PrimaryAction, SectionLabel, StatusDot, useColors } from "@/components/ui";
+import { Card, DeviceGlyph, EmptyState, Figure, IconButton, Panel, PrimaryAction, SectionLabel, StatusDot, Switch, useColors } from "@/components/ui";
 import type { TetherModule } from "./types";
 
 /** Where each peer sits around this device, as percentages of the stage. */
@@ -32,7 +32,7 @@ function Node({ device, innerRef, hub }: { device: Device; innerRef: RefObject<H
       <div className="text-center leading-tight whitespace-nowrap">
         <div className={cn("text-[13px] font-medium", offline && "text-subtle")}>{hub ? "This device" : device.name}</div>
         <div className="mt-0.5 font-mono text-[11px] text-subtle">
-          {hub ? device.name : offline ? "offline" : `${device.latencyMs?.toFixed(1)} ms`}
+          {hub ? device.name : offline ? "offline" : device.latencyMs !== null ? `${device.latencyMs.toFixed(1)} ms` : "connected"}
         </div>
       </div>
     </div>
@@ -50,8 +50,16 @@ function Constellation() {
   const r3 = useRef<HTMLDivElement>(null);
   const refs = [r0, r1, r2, r3];
 
-  const hub = devices.find((d) => d.id === me)!;
+  const hub = devices.find((d) => d.id === me);
   const peers = devices.filter((d) => d.id !== me).slice(0, SLOTS.length);
+
+  if (!hub) {
+    return (
+      <Card pad={0} className="h-full min-h-[340px]">
+        <EmptyState title="Waiting for the Tether service" hint="Your devices appear here once it answers." />
+      </Card>
+    );
+  }
 
   return (
     <Card pad={0} className="h-full min-h-[340px]">
@@ -110,14 +118,40 @@ function Stat({ label, value, decimals = 0, suffix, hint }: { label: string; val
   );
 }
 
+/** This device's identity and the pause switch (desktop app only). */
+function ThisDevice() {
+  const { devices, me, paused, setPaused, toast } = useTether();
+  const self = devices.find((d) => d.id === me);
+  return (
+    <div>
+      <SectionLabel>This device</SectionLabel>
+      <Card pad={20}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="truncate text-[13.5px] font-medium">{self?.name ?? "—"}</p>
+            <p className="mt-0.5 font-mono text-[11px] tracking-wide text-subtle" title="The start of this device's key. Compare it with what your other devices show.">
+              {self?.fingerprint ?? ""}
+            </p>
+          </div>
+          <Switch checked={!paused} onChange={(on) => void setPaused(!on).catch(() => toast("Could not change the pause setting"))} label="Sync this device" />
+        </div>
+        <p className="mt-4 text-xs text-muted-foreground">
+          {paused ? "Sync is paused: nothing you copy here leaves this device, and copies from your other devices only reach history." : "Sync is on: what you copy here reaches your other devices, and theirs reach this clipboard."}
+        </p>
+      </Card>
+    </div>
+  );
+}
+
 function OverviewView() {
-  const { devices, clips, transfers, me, setPairOpen, setActiveModule, toast } = useTether();
+  const { devices, clips, transfers, me, setPairOpen, setActiveModule, toast, backend } = useTether();
   const names = useMemo(() => new Map(devices.map((d) => [d.id, d.name])), [devices]);
   const peers = devices.filter((d) => !d.isMe);
   const online = peers.filter((d) => d.connection !== "offline");
-  const rtt = median(online.map((d) => d.latencyMs ?? 0));
+  const measured = online.flatMap((d) => (d.latencyMs === null ? [] : [d.latencyMs]));
+  const rtt = median(measured);
   const totalOps = devices.reduce((n, d) => n + d.seq, 0);
-  const latest = [...clips].filter((c) => !c.sensitive).sort((a, b) => b.ts - a.ts).slice(0, 4);
+  const latest = [...clips].filter((c) => !c.sensitive).sort(newestFirst).slice(0, 4);
   const active = transfers.find((t) => t.state === "active") ?? transfers.find((t) => t.state === "paused");
 
   const copy = (text: string) =>
@@ -135,7 +169,9 @@ function OverviewView() {
             Your devices, as one.
           </motion.h1>
           <p className="mt-4 max-w-lg text-base text-muted-foreground">
-            {online.length} of {peers.length} paired devices are online. Whatever you copy on one is already waiting on the rest.
+            {peers.length
+              ? `${online.length} of ${peers.length} paired ${peers.length === 1 ? "device is" : "devices are"} online. Whatever you copy on one is already waiting on the rest.`
+              : "Pair your other computers, and whatever you copy on one is waiting on the rest."}
           </p>
         </div>
         <PrimaryAction icon={icons.add} onClick={() => setPairOpen(true)}>
@@ -146,9 +182,9 @@ function OverviewView() {
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
         <Constellation />
         <div className="flex flex-col gap-4">
-          <Stat label="Round trip" value={rtt} decimals={1} suffix="ms" hint="Median to connected peers" />
+          <Stat label="Round trip" value={rtt} decimals={1} suffix="ms" hint={measured.length ? "Median to connected peers, measured by QUIC" : "No peer connected right now"} />
           <Stat label="Operations synced" value={totalOps} hint="Across every device's log" />
-          <Stat label="Replication lag" value={0} suffix="ops" hint="Everyone is up to date" />
+          <Stat label="Devices online" value={online.length} suffix={`of ${peers.length}`} hint={peers.length ? "Paired and connected now" : "Pair a device to start"} />
         </div>
       </section>
 
@@ -156,6 +192,7 @@ function OverviewView() {
         <div>
           <SectionLabel action={<button onClick={() => setActiveModule("clipboard")} className="text-xs text-muted-foreground transition-colors hover:text-foreground">View all</button>}>Latest from your devices</SectionLabel>
           <Panel className="divide-y divide-border overflow-hidden">
+            {latest.length === 0 && <p className="px-4 py-10 text-center text-[13px] text-subtle">Copy something on any paired device and it appears here.</p>}
             {latest.map((c, i) => {
               const dev = devices.find((d) => d.id === c.device);
               return (
@@ -176,6 +213,9 @@ function OverviewView() {
           </Panel>
         </div>
 
+        {backend.live ? (
+          <ThisDevice />
+        ) : (
         <div>
           <SectionLabel action={<button onClick={() => setActiveModule("transfers")} className="text-xs text-muted-foreground transition-colors hover:text-foreground">Open</button>}>Transfer</SectionLabel>
           {active ? (
@@ -200,6 +240,7 @@ function OverviewView() {
             <Panel className="flex h-[132px] items-center justify-center text-[13px] text-subtle">No transfers right now</Panel>
           )}
         </div>
+        )}
       </section>
     </div>
   );
@@ -212,6 +253,7 @@ export const overviewModule: TetherModule = {
   group: "Sync",
   summary: "Your devices, their connections and what just synced.",
   status: "stable",
+  daemon: true,
   core: true,
   view: OverviewView,
 };

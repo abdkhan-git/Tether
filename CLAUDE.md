@@ -23,7 +23,8 @@ Before planning or changing anything, read:
 - `crates/tether-os`: OS integration, the only crate allowed `unsafe` (every block has a `// SAFETY:` comment, enforced by clippy). Holds the owner-only local channel (named pipe / Unix socket) and clipboard change detection plus app privacy marks (`clipboard`). Tests that touch the real clipboard are `#[ignore]`d; run them by hand with `-- --ignored`.
 - `crates/tether-ipc`: the local control protocol (frames, mutual token handshake, requests/replies/events, client) used by the daemon, the CLI and the desktop app.
 - `crates/tether-cli`: the `tether` command (status, devices, history, watch, pair, join, revoke). A client of the control channel only; everything it prints from the daemon goes through `term::safe` (no terminal escapes).
-- `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion, Tauri shell not yet added). Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
+- `app/src-tauri`: the `tether-app` crate, the Tauri 2 shell (window, tray). A thin client of the control channel; the page may call only the eight commands in `build.rs` / `capabilities/main.json`, and the window refuses to navigate anywhere but the bundled page. Starts `tetherd --managed` from beside its own executable when no daemon answers.
+- `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion). Live data from the daemon inside the app, sample data in a plain browser. Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
 
 ## Commands
 
@@ -34,8 +35,10 @@ cargo fmt --all
 cargo run --release -p tether-sim -- --seeds 10000
 cargo run -p tether-daemon -- --stdin --profile left  # two daemons on one machine: /pair in one, /join CODE ADDR in the other
 cargo run -p tether-cli -- --profile left status      # the CLI, talking to that daemon over the control channel
-cd app && npm install && npm run dev                 # UI at http://localhost:1420
+cd app && npm install && npm run app                 # the desktop app against the daemon (builds tetherd first)
+cd app && npm run dev                                # browser preview at http://localhost:1420, sample data
 cd app && npm run build                              # typecheck + tests + production build
+cd app && npm run app:build                          # release app and installer, tetherd staged beside it
 ```
 
 ## Conventions

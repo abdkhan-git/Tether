@@ -41,7 +41,14 @@ pub fn status(ctx: &Ctx, port: u16) -> Status {
         revoked: s.log.is_revoked(),
         port,
         pairing_open,
+        paused: s.paused,
     }
+}
+
+/// Pause or resume sync on this device.
+pub fn set_paused(ctx: &Ctx, paused: bool) -> Result<bool> {
+    ctx.set_paused(paused)?;
+    Ok(paused)
 }
 
 /// Group members first (this device, then the others), then unpaired devices seen nearby.
@@ -64,7 +71,8 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
             };
             let name =
                 if *id == me { s.name.clone() } else { s.names.get(id).cloned().unwrap_or_else(|| added_as.clone()) };
-            Device { id: *id, name, state }
+            let rtt_us = s.peers.get(id).map(|c| u32::try_from(c.rtt().as_micros()).unwrap_or(u32::MAX));
+            Device { id: *id, name, state, rtt_us, ops: s.log.ops_from(*id).len() as u64 }
         })
         .collect();
     out.sort_by_key(|d| d.state != DeviceState::ThisDevice);
@@ -72,6 +80,8 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
         id: *id,
         name: s.names.get(id).cloned().unwrap_or_default(),
         state: DeviceState::Nearby,
+        rtt_us: None,
+        ops: 0,
     }));
     out
 }

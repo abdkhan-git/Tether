@@ -69,6 +69,9 @@ pub struct State {
     pub pairing: Option<PairWindow>,
     /// Trusted because we just paired with them, before the log confirms it.
     pub pinned: HashSet<DeviceId>,
+    /// Sync is paused: local copies are not recorded, and peers' copies are
+    /// not put on the system clipboard (they still arrive in history).
+    pub paused: bool,
     store: Option<Store>,
 }
 
@@ -127,6 +130,7 @@ impl Ctx {
             names: HashMap::new(),
             pairing: None,
             pinned: HashSet::new(),
+            paused: false,
             store,
         };
         let (events, _) = broadcast::channel(EVENT_QUEUE);
@@ -187,6 +191,9 @@ impl Ctx {
     /// broadcast, or `None` if it must not leave this device: the app that
     /// copied it marked it `private`, or it looks like a secret.
     pub fn local_copy(&self, text: String, private: bool) -> Option<Op> {
+        if self.lock().paused {
+            return None;
+        }
         if private {
             (self.deliver)(Delivered::MarkedPrivate);
             self.emit(Event::KeptLocal { kind: MARKED_PRIVATE.to_string() });
@@ -269,9 +276,10 @@ impl Ctx {
             for device in &out.equivocators {
                 error!(%device, "device signed two different operations with the same sequence number; its key may be compromised");
             }
-            // Surface the newest item only if it just arrived from a peer.
+            // Surface the newest item only if it just arrived from a peer, and
+            // never while paused.
             let me = s.log.me();
-            let delivery = s.log.clipboard_history().first().and_then(|op| {
+            let delivery = s.log.clipboard_history().first().filter(|_| !s.paused).and_then(|op| {
                 let new = op.seq > before.get(&op.device).copied().unwrap_or(0);
                 match (&op.kind, new && op.device != me) {
                     (OpKind::ClipboardText(text), true) => Some(match content::delivery_for(text) {
@@ -334,6 +342,24 @@ impl Ctx {
             conn.close(1u32.into(), b"not trusted");
         }
         self.emit(Event::DevicesChanged);
+    }
+
+    /// Pause or resume sync, and remember the choice across restarts. If it
+    /// cannot be saved, nothing changes.
+    pub fn set_paused(&self, paused: bool) -> Result<()> {
+        {
+            let mut s = self.lock();
+            if s.paused == paused {
+                return Ok(());
+            }
+            if let Some(store) = s.store.as_mut() {
+                store.set_paused(paused)?;
+            }
+            s.paused = paused;
+        }
+        info!(paused, "sync {}", if paused { "paused" } else { "resumed" });
+        self.emit(Event::Paused(paused));
+        Ok(())
     }
 
     /// Open a pairing window with this code.
@@ -456,5 +482,34 @@ mod tests {
         // The same text without the mark is an ordinary copy.
         assert!(ctx.local_copy("hunter2-but-not-pattern-shaped".into(), false).is_some());
         assert_eq!(ctx.lock().log.len(), 1);
+    }
+
+    #[test]
+    fn while_paused_nothing_is_recorded_or_applied_and_history_still_fills() {
+        let (ctx, seen) = ctx();
+        let peer_key = DeviceKey::for_test(2);
+        let now = ctx.clock.now_ms();
+        ctx.lock().log.append_local(OpKind::DeviceAdded { device: peer_key.id(), name: "peer".into() }, now).unwrap();
+        let mut peer = OpLog::new(peer_key);
+        peer.set_root(ctx.me());
+        let mut events = ctx.events.subscribe();
+
+        ctx.set_paused(true).unwrap();
+        assert_eq!(events.try_recv().unwrap(), Event::Paused(true));
+        let before = ctx.lock().log.len();
+        assert!(ctx.local_copy("copied while paused".into(), false).is_none());
+        assert_eq!(ctx.lock().log.len(), before, "a local copy is not recorded while paused");
+
+        let op = peer.append_local(OpKind::ClipboardText("from the peer".into()), now + 1).unwrap();
+        assert_eq!(ctx.apply(vec![op]).applied, 1, "a peer's copy still arrives");
+        assert!(seen.lock().unwrap().is_empty(), "nothing reaches the system clipboard while paused");
+        assert!(matches!(events.try_recv().unwrap(), Event::Clipboard(item) if item.text == "from the peer"));
+
+        ctx.set_paused(false).unwrap();
+        assert_eq!(events.try_recv().unwrap(), Event::Paused(false));
+        let op = peer.append_local(OpKind::ClipboardText("second".into()), now + 2).unwrap();
+        ctx.apply(vec![op]);
+        assert!(matches!(seen.lock().unwrap().as_slice(), [Delivered::Text(t)] if t == "second"));
+        assert!(ctx.local_copy("copied after resuming".into(), false).is_some());
     }
 }

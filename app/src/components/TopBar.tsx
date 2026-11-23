@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useTether } from "@/data/store";
-import { liveModules } from "@/modules/registry";
+import { useUsableModules } from "@/modules/registry";
 import PillNav from "./rb/PillNav";
-import { Icon, icons, platformGlyph } from "./Icon";
+import { Icon, icons, platformGlyph, unknownDeviceGlyph } from "./Icon";
 import { Search } from "./Search";
 import WarmTooltip from "./rb/WarmTooltip";
 import { IconButton, StatusDot, palette } from "./ui";
@@ -31,7 +31,7 @@ function Presence() {
         <span className="flex -space-x-2">
           {devices.map((d) => (
             <span key={d.id} className="relative flex size-8 items-center justify-center rounded-full border-2 border-background bg-surface-2 text-foreground" style={{ opacity: d.connection === "offline" ? 0.45 : 1 }}>
-              <Icon icon={platformGlyph[d.platform]} size={14} />
+              <Icon icon={d.platform ? platformGlyph[d.platform] : unknownDeviceGlyph} size={14} />
               {d.connection !== "offline" && <StatusDot connection={d.connection} className="absolute -right-px -bottom-px scale-[0.8]" />}
             </span>
           ))}
@@ -42,10 +42,11 @@ function Presence() {
 }
 
 export function TopBar() {
-  const { activeModule, disabledModules, setActiveModule, theme, toggleTheme } = useTether();
+  const { activeModule, disabledModules, setActiveModule, theme, toggleTheme, paused, setPaused, toast } = useTether();
+  const modules = useUsableModules();
   const c = palette[theme];
 
-  const nav = useMemo(() => liveModules.filter((m) => !disabledModules.includes(m.id)), [disabledModules]);
+  const nav = useMemo(() => modules.filter((m) => !disabledModules.includes(m.id)), [modules, disabledModules]);
   const items = nav.map((m) => ({ label: m.label, href: `#${m.id}`, ariaLabel: m.label }));
 
   return (
@@ -80,6 +81,11 @@ export function TopBar() {
       <div className="flex items-center justify-end gap-1.5 justify-self-end">
         <Search />
         <Presence />
+        <IconButton
+          icon={paused ? icons.play : icons.pause}
+          label={paused ? "Resume sync" : "Pause sync"}
+          onClick={() => setPaused(!paused).catch(() => toast(paused ? "Could not resume sync" : "Could not pause sync"))}
+        />
         <IconButton icon={icons.grid} label="Modules" onClick={() => setActiveModule("modules")} />
         <IconButton icon={theme === "dark" ? icons.sun : icons.moon} label={theme === "dark" ? "Light appearance" : "Dark appearance"} onClick={toggleTheme} />
       </div>

@@ -134,6 +134,6 @@ export const workspacesModule: TetherModule = {
   group: "Workspace",
   summary: "Snapshot your tabs, files and terminals, then resume on any device.",
   status: "preview",
-  note: "Stage 4",
+  note: "Roadmap · P6",
   view: WorkspacesView,
 };

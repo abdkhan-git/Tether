@@ -168,6 +168,10 @@ pub struct Loaded {
     pub imported: usize,
     /// Where a database sealed with a different key was moved.
     pub set_aside: Option<PathBuf>,
+    /// Sync was paused when the daemon last ran. An unreadable flag counts
+    /// as paused: failing closed keeps copies on this device until the user
+    /// resumes.
+    pub paused: bool,
 }
 
 impl Store {
@@ -187,8 +191,41 @@ impl Store {
         let next_id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM ops", [], |r| r.get(0))?;
         let mut store = Store { conn, sealer, next_id };
         let imported = import_legacy(dir, &mut store)?;
-        let (root, ops, dropped) = store.load()?;
-        Ok(Loaded { store, root, ops, dropped, imported, set_aside })
+        let (root, ops, mut dropped) = store.load()?;
+        let paused = match store.load_paused()? {
+            Some(paused) => paused,
+            None => {
+                dropped += 1;
+                true
+            }
+        };
+        Ok(Loaded { store, root, ops, dropped, imported, set_aside, paused })
+    }
+
+    /// The saved pause flag: `Some(false)` if none was saved, `None` if it is unreadable.
+    fn load_paused(&self) -> Result<Option<bool>> {
+        let sealed: Option<Vec<u8>> =
+            self.conn.query_row("SELECT sealed FROM meta WHERE name = 'paused'", [], |r| r.get(0)).optional()?;
+        Ok(match sealed {
+            None => Some(false),
+            Some(sealed) => self.sealer.open(Slot::Meta("paused"), &sealed).and_then(|b| match b.as_slice() {
+                [0] => Some(false),
+                [1] => Some(true),
+                _ => None,
+            }),
+        })
+    }
+
+    pub fn set_paused(&mut self, paused: bool) -> Result<()> {
+        let sealed = self.sealer.seal(Slot::Meta("paused"), &[u8::from(paused)])?;
+        self.conn
+            .execute(
+                "INSERT INTO meta (name, sealed) VALUES ('paused', ?1)
+                 ON CONFLICT (name) DO UPDATE SET sealed = excluded.sealed",
+                [sealed],
+            )
+            .context("saving the pause setting")?;
+        Ok(())
     }
 
     fn load(&mut self) -> Result<(Option<DeviceId>, Vec<Op>, usize)> {
@@ -473,6 +510,29 @@ mod tests {
         l.store.append(&ops[2]).unwrap();
         drop(l);
         assert_eq!(Store::open(&dir, &key).unwrap().ops, vec![ops[0].clone(), ops[2].clone()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_pause_flag_persists_and_a_tampered_one_reads_as_paused() {
+        let dir = temp_dir("paused");
+        let key = DbKey::for_test(1);
+        assert!(!Store::open(&dir, &key).unwrap().paused, "a new profile is not paused");
+        Store::open(&dir, &key).unwrap().store.set_paused(true).unwrap();
+        assert!(Store::open(&dir, &key).unwrap().paused);
+        Store::open(&dir, &key).unwrap().store.set_paused(false).unwrap();
+        assert!(!Store::open(&dir, &key).unwrap().paused);
+
+        // Flip one byte of the sealed flag: it no longer opens, so it fails closed.
+        let conn = raw(&dir);
+        let mut sealed: Vec<u8> =
+            conn.query_row("SELECT sealed FROM meta WHERE name = 'paused'", [], |r| r.get(0)).unwrap();
+        *sealed.last_mut().unwrap() ^= 1;
+        conn.execute("UPDATE meta SET sealed = ?1 WHERE name = 'paused'", [sealed]).unwrap();
+        drop(conn);
+        let l = Store::open(&dir, &key).unwrap();
+        assert_eq!((l.paused, l.dropped), (true, 1));
+        drop(l);
         let _ = fs::remove_dir_all(&dir);
     }
 

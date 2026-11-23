@@ -240,3 +240,50 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------- Vendored component styles ----------
+   CodeSlots and SlideCommit shipped these as inline <style> elements. They
+   live here so the desktop app's Content Security Policy can stay at
+   style-src 'self' (no inline styles). See components/VENDORED.md. */
+
+@keyframes code-slots-blink {
+  0%,
+  49.9% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes sc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.sc-spinner {
+  animation: sc-spin 1s linear infinite;
+  animation-play-state: paused;
+}
+.sc-root[data-phase="pending"] .sc-spinner {
+  animation-play-state: running;
+}
+@keyframes sc-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-spinner {
+    animation: sc-breathe 1.4s ease-in-out infinite;
+    animation-play-state: paused;
+  }
+  .sc-root[data-phase="pending"] .sc-spinner {
+    animation-play-state: running;
+  }
+}

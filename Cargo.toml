@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tether-cli", "crates/tether-core", "crates/tether-daemon", "crates/tether-ipc", "crates/tether-os", "crates/tether-sim"]
+members = ["app/src-tauri", "crates/tether-cli","crates/tether-core", "crates/tether-daemon", "crates/tether-ipc", "crates/tether-os", "crates/tether-sim"]
 
 [workspace.package]
 version = "0.1.0"

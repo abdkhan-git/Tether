@@ -24,11 +24,13 @@ Keep this file short and factual. Every claim here should be something the code 
 
 ## Current state (2026-11-23)
 
-**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** steps 1 to 4 are committed (encrypted storage `9f6de96`, control channel `2cc9f81`, CLI `8c725bb`, clipboard events `5a2b601`); step 5, reconnect with backoff, is done (not yet committed when this was written).
+**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** steps 1 to 5 are committed (encrypted storage `9f6de96`, control channel `2cc9f81`, CLI `8c725bb`, clipboard events `5a2b601`, reconnect `21585a1`); step 6, the Tauri shell and tray, is done (not yet committed when this was written).
 
 Verified on Windows:
 
-- **Rust tests:** `cargo test --workspace` passes all 106: 6 `tether-cli`, 43 core (9 for backoff), 20 daemon unit (9 store, 7 clipboard logic, 1 privacy mark), 4 CLI end-to-end, 6 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 11 `tether-os` and 2 simulator. 4 more are `#[ignore]`d because they use the real clipboard or credential store; all 4 pass when run by hand (see below).
+- **Rust tests:** `cargo test --workspace` passes all 118: 7 `tether-app`, 6 `tether-cli`, 43 core (9 for backoff), 23 daemon unit (10 store, 7 clipboard logic, 1 privacy mark, 2 pause and log), 4 CLI end-to-end, 8 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 11 `tether-os` and 2 simulator. 4 more are `#[ignore]`d because they use the real clipboard or credential store; all 4 pass when run by hand (see below).
+- **Desktop app (P1.6), checked by hand through the WebView2 DevTools protocol** against a release build (`npx tauri build --no-bundle`), with two ephemeral `--stdin` daemons so neither the clipboard nor the credential store was touched: the page loads with no CSP violations or errors; live status, devices (QUIC RTT 0.5 ms on loopback), pairing through the app's `pair` command, a copy from the peer, a held command, pause (nothing applied, still in history, banner shown), and revoke all work; five commands outside the allow-list are refused by Tauri's ACL; bad ids, codes, addresses and cursors are refused in Rust; `open_link` refuses file:, UNC, ms-msdt:, javascript: and credentialed links; navigating to a remote page and `window.open` are refused. The CSP is enforced, not just quiet: injected inline style and script, inline handlers, string eval from page code, remote fetch, images and iframes each raise a violation report. With a throwaway profile and no token, the app started its own `tetherd --managed`; killing the app made that daemon log "the app that started this daemon has gone", shut down, and remove its control token from Credential Manager. Profile, keys and logs deleted afterwards. `npx tauri dev -- -- --profile X` was checked the same way. The scripts were throwaway (scratchpad); there are no UI tests in CI.
+- **Mutation checks (P1.6):** removing the paused check in `Ctx::local_copy` makes `control_e2e::a_paused_device_sends_nothing_and_applies_nothing_until_resumed` fail; removing it from `Ctx::apply` makes `ctx::tests::while_paused_…` fail.
 - **Reconnect (run by hand):** `cargo test -p tether-daemon --test reconnect_e2e -- --ignored --nocapture`. Two persistent daemons, A hard-killed: after a 6 s outage B reconnects 0.9 s after A is back (stateless reset); after a 25 s outage, 2.8 s (backoff: 932 ms, then 1,829 ms). History survives the kill. The test deletes its profiles, even when it fails. Without the derived connection-ID key the quick case takes 14 s and the test fails.
 - **Real clipboard (run by hand):** `cargo test -p tether-os --release -- --ignored --test-threads=1 --nocapture` (marks detected; change detected in p50 1.1 ms, p99 7.6 ms over 100 copies) and `cargo test -p tether-daemon --release --test clipboard_e2e -- --ignored --nocapture` (copy on A to printed by B over loopback in p50 4.0 ms, p95 5.4 ms; all three privacy marks keep the copy on A; B's copy lands on A's clipboard and is not echoed). Windows 11, Intel Core i7-1265U, 15 GB. Both restore the clipboard text afterwards.
 - **Mutation checks:** raising the client cap to 9, or making the server skip the client's proof, each makes a `control_e2e` test fail. Letting ESC through `term::safe` makes `cli_e2e::escape_sequences_from_a_peer_never_reach_the_terminal` fail. Making `marked_private` always false makes `clipboard_e2e` fail.
@@ -37,8 +39,8 @@ Verified on Windows:
 - **Unix code:** `tether-os` (local channel, and clipboard: macOS `changeCount` and nspasteboard.org marks, X11 XFixes) passes clippy `-D warnings` for Linux and macOS, and `tether-ipc` for Linux, type-checked from Windows (`rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin`). None of it has run yet; CI runs the Unix tests, but CI has no desktop, so the macOS and X11 clipboard code needs a check on a real Mac and a Linux desktop. The macOS check of `tether-ipc` cannot run from Windows (blake3 needs a C compiler for that target).
 - **Lints:** `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check` are clean.
 - **Simulator:** the last full run (at P0) gave 0 failures across 10,000 seeds: 2.0M ops, 201k network faults, 149k injected forgeries (none accepted), 3,923 revocations, 206 s on 12 threads. Re-run after P1.5 added `backoff` to `tether-core`: 10,000 seeds, 0 failures, the same 2.0M ops, 201k faults, 149k attacks and 3,923 revocations (416 s, slower than usual because the test suite ran at the same time). P1 has changed no sync logic in `tether-core`.
-- **Supply chain:** `cargo deny check advisories licenses bans sources` passes. The duplicate-version warnings are expected (spake2 pulls in curve25519 v4); P1.1 added no new duplicates. `npm audit` reports 0 vulnerabilities.
-- **Frontend:** `cd app && npm run build` passes, including 36 content-detection tests.
+- **Supply chain:** `cargo deny check advisories licenses bans sources` passes with Tauri in the tree (more duplicate-version warnings, which are allowed: Tauri pulls in several `windows-sys` versions). `npm audit --omit=dev` (the CI gate) reports 0. Full `npm audit` now reports 3 advisories in dev-only `vitest` 3 and its `tinypool` (published after the last session; fixed in vitest 5, which needs a Vite upgrade). Follow-up below.
+- **Frontend:** `cd app && npm run build` passes, including 44 tests (36 content detection, 8 for the daemon data mapping).
 - **Real credential store:** with a throwaway profile, `tetherd` saved both keys in Windows Credential Manager (`device-key/<profile>.Tether`, `db-key/<profile>.Tether`). It kept the same identity across a hard kill, reloaded its operation (the next copy got `seq=2`), and no plain text reached the data folder. The profile was deleted afterwards.
 
 Not verified yet:
@@ -47,7 +49,9 @@ Not verified yet:
 - The real OS clipboard on two operating systems.
 - macOS Keychain and Linux Secret Service (the code is the same `keyring` path; only Windows was run).
 - That a second OS user is refused by the pipe or socket. This rests on the DACL and file modes, which the tests read back; no test runs as another account.
-- That the control token is removed on a clean shutdown (Ctrl+C). The checks above stopped the daemon with a hard kill.
+- The control token's removal after Ctrl+C in a terminal (it is now verified for the app's `--managed` shutdown, which runs the same code).
+- The desktop app on macOS and Linux (tray, WKWebView, WebKitGTK). CI builds it on all three; it has only run on Windows.
+- The tray menu's Quit item and the hide-on-close window were not clicked in the checks above (no way to drive the tray from DevTools). Quit runs the same shutdown as the crash path that was checked.
 
 ### Where things live
 
@@ -71,7 +75,9 @@ Not verified yet:
 | CLI | `crates/tether-cli/src/lib.rs` (`Cli`, `Command`, `Target`, `run` writes to any `Write` and reads prompts from any `BufRead`), `term.rs` (`safe` sanitiser, previews, "3 min ago"), `main.rs` (the `tether` binary) |
 | End-to-end tests | `crates/tether-daemon/tests/security_e2e.rs`, `control_e2e.rs`, `cli_e2e.rs` (CLI run in-process against real daemons), shared harness in `tests/common/mod.rs` (`Daemon::with_control` passes a token through `TETHER_CONTROL_TOKEN`) |
 | Simulator | `crates/tether-sim/src/lib.rs` (attacks, revocation, invariants), `main.rs` (parallel seeds) |
-| UI | `app/src/modules/*` (sample data only, not connected to the daemon), `app/src/lib/content/*` |
+| Pause | `tether_ipc::Request::SetPaused`, `Status.paused`, `Event::Paused`; `crates/tether-daemon/src/ctx.rs` (`set_paused`, gates in `local_copy` and `apply`), `store.rs` (sealed `paused` flag in `meta`, unreadable means paused); CLI `tether pause` / `resume`; console `/pause` / `/resume` |
+| Desktop app (Tauri) | `app/src-tauri/src/main.rs` (the eight commands, window with navigation guard, setup), `link.rs` (connect or start `tetherd --managed`, request retry, event pump, shutdown, daemon log path), `guard.rs` (`is_app_url`, `external_link`), `view.rs` (JSON shapes and input checks), `tray.rs`; `build.rs` (command allow-list), `capabilities/main.json`, `tauri.conf.json` (CSP), `tauri.bundle.json` + `app/scripts/stage-tetherd.mjs` (installer) |
+| UI | `app/src/modules/*`, `app/src/lib/content/*`; data: `app/src/data/store.ts` (`Backend`), `live.ts` (daemon), `daemon.ts` (typed commands and events), `map.ts` (+ tests), `mock.ts` (browser preview only) |
 | CI and supply chain | `.github/workflows/ci.yml`, `deny.toml` |
 
 ---
@@ -101,13 +107,18 @@ The steps below are in order, because each depends on the ones before it.
   - `tether_core::backoff::Redial`: new targets are due at once; failures wait uniform in [ceiling/2, ceiling], where the ceiling doubles from 1 s and is capped at 30 s; a session of at least 30 s resets the backoff (redialled at once), a shorter one counts as a failure; never two dials in flight per target. Tested without sleeping (unit and property tests).
   - The daemon loop wakes when a dial is due or on any `Event::DevicesChanged`, with a 30 s safety re-check. `--peer` addresses use the same schedule. The `dialing` set in `ctx` is gone.
   - Found while testing: a hard-killed peer went unnoticed for 30 s (the old idle timeout), and a restarted peer could not reset the stale connection, because quinn's reset key and connection-ID key were random per process. Both keys are now derived from the device key; the idle timeout is 15 s.
-- [ ] **6. Tauri shell and tray.**
-  - Wrap `app/` in Tauri v2.
-  - Strict CSP, no remote content, and only allow-listed commands (SECURITY.md rule 10).
-  - The Tauri side is a thin client of the control channel; the daemon stays the only privileged process.
-  - Replace the sample data in `app/src/modules/*` with live data (devices, clipboard, pairing flow).
-  - Tray menu: open, pause sync, quit.
+- [x] **6. Tauri shell and tray.** Done 2026-11-23. Threat model in SECURITY.md ("Desktop app").
+  - `app/src-tauri` (crate `tether-app`, Tauri 2.12, in the workspace). Thin client of the control channel; holds no keys, no history, no sockets.
+  - The page's whole API is eight commands (`status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `open_link`), declared in `build.rs` so Tauri refuses anything `capabilities/main.json` does not grant. Every argument is checked in Rust.
+  - CSP `default-src 'none'`, scripts and styles `'self'` only (the inline `<style>` in two vendored components moved to `index.css`), `connect-src ipc:` only, frozen prototype. The window refuses navigation away from the bundled page and new windows; links open only through `open_link` (http, https, mailto).
+  - Daemon: the app uses a running daemon for its profile, or starts the `tetherd` next to its executable with the new `--managed` flag (no console; clean shutdown when stdin closes, so it never outlives the app). Log in `%LOCALAPPDATA%\Tether\logs\`; held items are now logged without their preview, so no clipboard text reaches that file.
+  - Added beyond the original plan, because the tray needed it: **pause**, end to end (protocol v2 `SetPaused`, sealed and persisted, fail closed, `tether pause`/`resume`, console `/pause`/`/resume`). Also per-device QUIC RTT and op counts in `Devices`, shown in the UI.
+  - Live data in Overview, Clipboard (paging, held items explained, "Held" filter), Devices (nearby list, real revoke, fingerprints), Diagnostics (real RTT, this device's version vector, clipboard ops), pairing (show a code and wait for the newcomer; enter a code with an optional address). Transfers and Workspaces are listed as coming inside the app. Rename, pin, delete and "keep local" are hidden in the app until the daemon supports them.
+  - Tray: Open Tether, Pause sync (checked from the daemon's state), Quit Tether; tooltip shows connected devices. Closing the window hides it. Single instance for the default profile.
+  - Follow-ups: start at login (needed for step 7 without a manual launch); "Show in File Explorer" for local paths only (refuse UNC); peers' OS and version vectors in the protocol; vitest 5 (dev-only advisories); UI tests in CI.
 - [ ] **7. Two-machine check.** Pair two real machines. Copy text and check it arrives. Reboot each machine and check sync resumes. Record what was measured.
+  - Build the app on each machine (`cd app; npm install; npm run app:build`, or `npm run app` for a dev build). On the Mac this also gives the first run of the tray, WKWebView and Keychain code.
+  - Nothing starts Tether at login yet: either relaunch the app after each reboot (and say so in the record) or add start at login first (`tauri-plugin-autostart`, off by default, a switch in the UI).
 - [ ] **8. Close out P1.**
   - Update ROADMAP.md (mark P1 done), SECURITY.md (status table; the residual risk "history is plain text" is closed), PROJECT_CONTEXT.md (build status), README and this file.
   - Give the owner the git commands.
@@ -120,7 +131,8 @@ The steps below are in order, because each depends on the ones before it.
 
 | Decision | Options | Recommendation |
 | --- | --- | --- |
-| How the UI reaches the daemon | Tauri spawns `tetherd` as a sidecar · `tetherd` runs as a per-user startup service | Sidecar for P1, a service later |
+| How the UI reaches the daemon | **Decided for P1 (2026-11-23):** a managed sidecar. The app uses a running daemon, or starts `tetherd --managed` beside it, which stops with the app. A per-user startup service remains the option for later. | Revisit with start at login |
+| Start at login | Off by default with a switch in the app · on by default | Off by default, a switch on the Overview's "This device" card |
 
 ---
 
@@ -136,6 +148,10 @@ The steps below are in order, because each depends on the ones before it.
 - If a cross-target `cargo clippy --target ...` seems to hang, it is probably waiting for the build lock held by the editor's rust-analyzer. Run it again once the editor is idle.
 - Inspect the live pipe from PowerShell: `[System.IO.Directory]::GetFiles("\\.\pipe\") | ? { $_ -like "*tether-*" }`, then `Get-Acl` on that path.
 - `cmdkey` arguments get mangled by Git Bash. Run it from PowerShell, for example `cmdkey /delete:"db-key/<profile>.Tether"`.
+- To inspect the desktop app, start it with `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333"` and talk to `http://127.0.0.1:9333/json` with the Chrome DevTools Protocol (Node 22 has `WebSocket` built in). DevTools' own `Runtime.evaluate` is exempt from the CSP, so test the CSP by listening for `securitypolicyviolation` or running code from a page callback (string `setTimeout`), not by calling `eval` from DevTools.
+- To point the app at an ephemeral daemon (no credential store), start `tetherd --ephemeral --stdin --profile X` and the app with `--profile X`, both with the same `TETHER_CONTROL_TOKEN`.
+- A first `npx tauri build` takes about 8 minutes (Tauri in release); `cargo build -p tether-app` does not need `app/dist` (debug builds load from Vite), so CI's Rust jobs need no npm step.
+- An inline `<style>` or `<script>` in the page is blocked in the app (it works in the browser preview). Vendored components refreshed from upstream must have theirs moved to `index.css` again.
 
 ---
 
@@ -152,3 +168,4 @@ The steps below are in order, because each depends on the ones before it.
 | 2026-11-23 | P1.3 `tether` CLI | New crate `tether-cli`; terminal-escape sanitiser; pair waits for the join; revoke confirms; 85 tests; real binary checked against a live daemon |
 | 2026-11-23 | P1.5 reconnect with backoff | `tether_core::backoff` (pure, property-tested); event-driven reconnect loop; QUIC reset and connection-ID keys derived from the device key; idle timeout 15 s; restarted peer reconnected in 0.9 s |
 | 2026-11-23 | P1.4 clipboard events | `tether-os::clipboard` (Windows listener, macOS changeCount, X11 XFixes, polling fallback); password-manager privacy marks honoured; 97 tests plus 3 real-clipboard tests run by hand; copy to peer 4.0 ms p50 over loopback |
+| 2026-11-23 | P1.6 Tauri shell and tray | New crate `tether-app` (eight allow-listed commands, strict CSP, navigation guard, managed daemon); pause end to end (protocol v2, sealed, fail closed); live data in the UI; 118 Rust and 44 frontend tests; release build checked through WebView2 DevTools (34 + 15 checks) |

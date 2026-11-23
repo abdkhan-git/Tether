@@ -41,14 +41,20 @@ impl Client {
 
     /// Send one request and wait for its reply. A daemon-side error becomes `Err`.
     pub async fn request(&mut self, req: &Request) -> Result<Reply> {
+        match self.call(req).await? {
+            Response::Ok(reply) => Ok(reply),
+            Response::Err(msg) => Err(anyhow!(msg)),
+        }
+    }
+
+    /// Send one request and wait for its response. `Err` means the connection
+    /// failed and is no longer usable; a refusal by the daemon is `Ok(Response::Err)`.
+    pub async fn call(&mut self, req: &Request) -> Result<Response> {
         let exchange = async {
             send(&mut self.stream, req, MAX_REQUEST_BYTES).await?;
             recv::<Response, _>(&mut self.stream, MAX_REPLY_BYTES).await
         };
-        match timeout(REQUEST_TIMEOUT, exchange).await.map_err(|_| anyhow!("tetherd did not answer"))?? {
-            Response::Ok(reply) => Ok(reply),
-            Response::Err(msg) => Err(anyhow!(msg)),
-        }
+        Ok(timeout(REQUEST_TIMEOUT, exchange).await.map_err(|_| anyhow!("tetherd did not answer"))??)
     }
 
     /// Turn this connection into a stream of events.

@@ -8,6 +8,8 @@ import {
   ClipboardIcon,
   CodeIcon,
   ComputerIcon,
+  ComputerDesk01Icon,
+  Alert02Icon,
   Copy01Icon,
   Delete02Icon,
   File01Icon,
@@ -102,6 +104,7 @@ export const icons = {
   external: ArrowUpRight01Icon,
   wand: MagicWand01Icon,
   wrap: TextWrapIcon,
+  alert: Alert02Icon,
 } as const;
 
 export const platformGlyph: Record<Platform, typeof ComputerIcon> = {
@@ -109,6 +112,9 @@ export const platformGlyph: Record<Platform, typeof ComputerIcon> = {
   macos: LaptopIcon,
   linux: TerminalIcon,
 };
+
+/** A paired device that has not said which OS it runs (peers do not report it yet). */
+export const unknownDeviceGlyph = ComputerDesk01Icon;
 
 export const connectionGlyph: Record<Connection, typeof Wifi01Icon> = {
   lan: Wifi01Icon,

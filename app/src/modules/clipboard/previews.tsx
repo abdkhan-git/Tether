@@ -9,7 +9,7 @@ import { formatCode, type Formatted } from "@/lib/content/format";
 import { highlight, type Language } from "@/lib/content/language";
 import { contrast, joinLines, titleCase, toHex, toHslString, toRgbString, type JwtInfo, type LinkInfo, type PathInfo, type Rgba, type TableInfo, type TextStats, type TimeInfo } from "@/lib/content/parsers";
 import { relativeTime } from "@/lib/format";
-import { fileManager, os } from "@/lib/platform";
+import { os } from "@/lib/platform";
 import { cn } from "@/lib/cn";
 import { Icon, icons } from "@/components/Icon";
 import { Button, Chip, IconButton, Panel, Segmented } from "@/components/ui";
@@ -116,6 +116,7 @@ export function CodeView({ text, language }: { text: string; language: Language 
 
 export function LinkView({ link }: { link: LinkInfo }) {
   const copy = useCopy();
+  const openLink = useTether((s) => s.backend.openLink);
   const { url } = link;
   const host = url.hostname.replace(/^www\./, "");
   const params = [...url.searchParams.entries()];
@@ -149,7 +150,7 @@ export function LinkView({ link }: { link: LinkInfo }) {
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" icon={icons.external} onClick={() => window.open(url.href, "_blank", "noopener,noreferrer")}>
+        <Button variant="outline" size="sm" icon={icons.external} onClick={() => openLink(url.href)}>
           Open in browser
         </Button>
         {link.tracking.length > 0 && (
@@ -318,9 +319,12 @@ export function TableView({ table }: { table: TableInfo }) {
 
 /* ---------- Paths ---------- */
 
+// No "Show in File Explorer" yet: a path can come from another device, and
+// asking Windows to show a network path (\\host\share) makes it sign in to
+// that host, which leaks the user's NTLM hash. It needs a local-paths-only
+// check first.
 export function PathView({ path }: { path: PathInfo }) {
   const copy = useCopy();
-  const toast = useTether((s) => s.toast);
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
@@ -340,16 +344,13 @@ export function PathView({ path }: { path: PathInfo }) {
           </span>
         ))}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" icon={icons.folder} onClick={() => toast(`Opens in ${fileManager[os]} once the desktop shell is in place`)}>
-          Show in {fileManager[os]}
-        </Button>
-        {path.alternate && (
+      {path.alternate && (
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" icon={icons.copy} onClick={() => copy(path.alternate!.value, `Copied ${path.alternate!.label}`)}>
             Copy as {path.alternate.label}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -357,13 +358,13 @@ export function PathView({ path }: { path: PathInfo }) {
 /* ---------- Small kinds ---------- */
 
 export function EmailView({ address }: { address: string }) {
+  const openLink = useTether((s) => s.backend.openLink);
   return (
     <div className="flex flex-col items-start gap-4">
       <p className="selectable text-[22px] font-semibold tracking-tight">{address}</p>
-      <a href={`mailto:${address}`} className="inline-flex h-8 items-center gap-2 rounded-full border border-border px-3.5 text-[13px] font-medium transition-colors hover:border-border-hover hover:bg-muted">
-        <Icon icon={icons.mail} size={15} />
+      <Button variant="outline" size="sm" icon={icons.mail} onClick={() => openLink(`mailto:${address}`)}>
         Write an email
-      </a>
+      </Button>
     </div>
   );
 }

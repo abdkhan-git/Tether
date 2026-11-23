@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useTether } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { isMod, searchShortcut } from "@/lib/platform";
-import { liveModules } from "@/modules/registry";
+import { useUsableModules } from "@/modules/registry";
 import { modulesPageModule } from "@/modules/modules-page";
 import { Icon, icons, type IconData } from "./Icon";
 import { Kbd } from "./ui";
@@ -27,7 +27,8 @@ const spring = { type: "spring", duration: 0.4, bounce: 0.12 } as const;
 export function Search() {
   const open = useTether((s) => s.searchOpen);
   const setOpen = useTether((s) => s.setSearch);
-  const { disabledModules, clips, devices, theme } = useTether();
+  const { disabledModules, clips, devices, theme, paused } = useTether();
+  const modules = useUsableModules();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -36,7 +37,7 @@ export function Search() {
 
   const items = useMemo<Item[]>(() => {
     const s = useTether.getState();
-    const pages: Item[] = [...liveModules.filter((m) => !disabledModules.includes(m.id)), modulesPageModule].map((m) => ({
+    const pages: Item[] = [...modules.filter((m) => !disabledModules.includes(m.id)), modulesPageModule].map((m) => ({
       id: `go-${m.id}`,
       label: m.label,
       hint: m.summary,
@@ -46,10 +47,18 @@ export function Search() {
       run: () => s.setActiveModule(m.id),
     }));
     const commands: Item[] = [
-      ...liveModules
+      ...modules
         .filter((m) => !disabledModules.includes(m.id))
         .flatMap((m) => m.commands?.() ?? [])
         .map((c) => ({ id: c.id, label: c.label, icon: icons.flash, section: "Actions" as const, haystack: `${c.label} ${c.keywords ?? ""}`.toLowerCase(), run: c.run })),
+      {
+        id: "pause",
+        label: paused ? "Resume sync" : "Pause sync",
+        icon: paused ? icons.play : icons.pause,
+        section: "Actions",
+        haystack: "pause resume sync stop start clipboard",
+        run: () => void s.setPaused(!paused).catch(() => s.toast("Could not change the pause setting")),
+      },
       { id: "theme", label: theme === "dark" ? "Use light appearance" : "Use dark appearance", icon: theme === "dark" ? icons.sun : icons.moon, section: "Actions", haystack: "theme appearance dark light mode", run: s.toggleTheme },
     ];
     const names = new Map(devices.map((d) => [d.id, d.name]));
@@ -70,7 +79,7 @@ export function Search() {
           ),
       }));
     return [...pages, ...commands, ...history];
-  }, [disabledModules, clips, devices, theme]);
+  }, [disabledModules, clips, devices, theme, paused, modules]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();

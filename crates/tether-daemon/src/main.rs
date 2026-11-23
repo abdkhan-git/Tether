@@ -64,6 +64,12 @@ struct Args {
     /// Turn off mDNS discovery (for networks that block multicast).
     #[arg(long)]
     no_mdns: bool,
+
+    /// Started by the desktop app: take no console commands on stdin, and
+    /// shut down cleanly when stdin closes, which happens when the app quits
+    /// or crashes. A daemon the app started never outlives it.
+    #[arg(long)]
+    managed: bool,
 }
 
 fn default_name() -> String {
@@ -88,6 +94,9 @@ async fn main() -> Result<()> {
     }
 
     // Identity and durable state.
+    if args.managed && args.stdin {
+        bail!("--managed and --stdin cannot be combined: a managed daemon takes nothing from stdin");
+    }
     let (key, loaded) = if args.ephemeral {
         (keystore::generate()?, None)
     } else {
@@ -98,6 +107,7 @@ async fn main() -> Result<()> {
     };
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let mut log = OpLog::new(key.clone());
+    let paused = loaded.as_ref().is_some_and(|l| l.paused);
     let store = match loaded {
         Some(l) => {
             if let Some(aside) = &l.set_aside {
@@ -139,6 +149,10 @@ async fn main() -> Result<()> {
     };
     let gate = Arc::new(RwLock::new(Gate::default()));
     let ctx = Ctx::new(log, args.name.clone(), store, gate, tls_id, clock, deliver);
+    if paused {
+        ctx.lock().paused = true;
+        info!("sync is paused on this device: copies stay here until it is resumed");
+    }
     if ctx.lock().log.is_revoked() {
         warn!("this device was revoked by its group; it will not sync. Pair it again to rejoin.");
     }
@@ -177,7 +191,7 @@ async fn main() -> Result<()> {
     } else {
         input::spawn_clipboard(local_tx, clip_tx, clip_rx);
     }
-    input::spawn_stdin(line_tx, args.stdin);
+    input::spawn_stdin(line_tx, args.stdin, !args.managed);
 
     if let Some((listener, token)) = control {
         tokio::spawn(ipc::serve(listener, token, ctx.clone(), endpoint.clone()));
@@ -192,6 +206,11 @@ async fn main() -> Result<()> {
             Some(line) = line_rx.recv() => match line {
                 Line::Command(cmd) => control::handle(&ctx, &endpoint, &cmd).await,
                 Line::Text(text) => copied(&ctx, LocalCopy { text, private: false }),
+                Line::Closed if args.managed => {
+                    info!("the app that started this daemon has gone");
+                    break;
+                }
+                Line::Closed => {}
             },
             _ = tokio::signal::ctrl_c() => break,
         }

@@ -278,6 +278,77 @@ Residual risk the user should know about: while a device is unreachable, its pee
   retrying every 15 to 30 s or so (a failed dial also waits out the 10 s handshake timeout).
 ```
 
+### Desktop app: Tauri shell, tray and pause (P1.6)
+
+```
+Feature: the desktop app (app/src-tauri: window, tray, the page's commands) and the pause
+  setting it drives (Request::SetPaused in tether-ipc; Ctx::set_paused in the daemon).
+Capability it needs: none of its own. It is a client of the local control channel, like the
+  CLI, and can do only what that channel allows. It starts tetherd if none is running.
+What an attacker gains if it is abused: the page renders text chosen by other devices
+  (clipboard items, device names). If that text could run script, or navigate the window to a
+  remote page, the attacker would sit next to the app's commands: read history, open a
+  pairing window, join a group the attacker controls, revoke devices. A link opened carelessly
+  could launch a program (file:, ms-msdt:, search-ms:) or, for a network path, make Windows
+  sign in to the attacker's host and leak the user's NTLM hash. A pause that silently
+  resumed would sync copies the user meant to keep.
+Who could abuse it: a compromised paired device (content, names); a web page the user is
+  tricked into loading in the app; a program squatting the control channel (handled by its
+  mutual authentication); a malicious npm or crate dependency.
+Mitigations:
+  - The page loads nothing remote. CSP: default-src 'none'; script-src 'self'; style-src
+    'self' (the two vendored components that injected <style> were changed); img-src 'self'
+    data:; font-src 'self'; connect-src ipc: only; no objects, frames, workers, forms or
+    <base>. Object.prototype is frozen before the page loads (freezePrototype).
+  - Text from other devices is rendered as text by React; the only HTML inserted is
+    highlight.js output, which escapes its input.
+  - The window can show only the bundled page: every navigation elsewhere is refused
+    (on_navigation, guard::is_app_url), and new windows (window.open, target=_blank) are
+    refused. The native file-drop handler is off.
+  - The page's whole API is eight commands (status, devices, history, pair, join, revoke,
+    set_paused, open_link). build.rs declares them in an app manifest, so Tauri refuses any
+    command the window's capability (capabilities/main.json) does not grant; the capability
+    adds only event listening and setting the window theme, and applies to local content
+    only. No file system, shell, HTTP, clipboard or opener plugin is exposed.
+  - Every argument is checked in Rust before it reaches the daemon: device ids parse as
+    keys, pairing codes are six digits, addresses parse as ip:port (64 bytes at most),
+    history pages are clamped, unknown fields in a cursor are refused.
+  - open_link opens only http(s) and mailto links, at most 2048 bytes, without control
+    characters or user:password@, and only on a click in the page. "Show in File Explorer"
+    is not offered, because a network path would leak the NTLM hash.
+  - The app holds no keys, no history and no sockets; tetherd stays the only privileged
+    process (rule 9). It finds tetherd next to its own executable, never on PATH.
+  - A daemon the app starts runs with --managed: no console on stdin, and a clean shutdown
+    (connections closed, control token removed) when stdin closes, which happens when the app
+    quits or crashes. A daemon the user started by hand is used as is and never stopped.
+  - The daemon's log goes to a file (Tether/logs/tetherd-<profile>.log). Log lines never hold
+    clipboard text: held items are logged without their preview.
+  - Pause is stored sealed in the encrypted database; an unreadable flag counts as paused
+    (fail closed). While paused, local copies are not recorded and peers' copies are not
+    written to the system clipboard; they still arrive in history.
+  - Single instance (default profile): a second launch focuses the running window.
+Limits: those of the control channel; history pages of 100; device list polled every 3 s
+  only while the window is visible.
+Test or invariant proving the main property: tether-app guard::tests (only the bundled page
+  is a navigation target; file:, UNC, javascript:, ms-msdt:, search-ms: and credentialed
+  links are refused), view::tests (codes, addresses, ids and cursors from the page are
+  checked); tether-daemon ctx::tests::while_paused_nothing_is_recorded_or_applied_and_history_still_fills,
+  store::tests::the_pause_flag_persists_and_a_tampered_one_reads_as_paused,
+  input::tests::log_lines_never_carry_clipboard_text, control_e2e (a paused device sends and
+  applies nothing until resumed; a managed daemon stops cleanly when its stdin closes).
+  Checked by hand in a release build on Windows through the WebView2 DevTools protocol: the
+  served CSP header matches the config; the page loads with no violations; an injected inline
+  <style> or <script>, an inline event handler, string eval from page code, a remote fetch,
+  image or iframe are each blocked with a violation report; five commands outside the list
+  (opener, window close, fs, shell, event emit) are refused by the ACL; navigating to a remote
+  page and window.open are refused; killing the app makes its daemon shut down cleanly and
+  remove its control token. Not automated yet (no UI tests in CI).
+Residual risk the user should know about: the CSP keeps img-src data: for one vendored
+  texture; links the user clicks open in their browser, where the usual web risks apply;
+  the webview itself (WebView2, WKWebView, WebKitGTK) is part of the trusted base and is
+  updated by the OS, not by Tether.
+```
+
 ## Threat model template (one per feature)
 
 ```

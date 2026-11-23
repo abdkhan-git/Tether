@@ -21,4 +21,6 @@ Copied as source (shadcn-registry style), not installed as packages, so they can
 | `magic/border-beam` | Light running round an active transfer |
 | `magic/number-ticker` | `Figure`, large springing numbers |
 
+Local changes: `rb/CodeSlots` and `rb/SlideCommit` rendered static inline `<style>` elements. Their rules moved to `src/index.css` (end of file) so the desktop app's Content Security Policy can keep `style-src 'self'`. Re-apply this when refreshing either from upstream: an inline `<style>` is blocked in the desktop app.
+
 Theme them through the wrappers in `../ui.tsx`, not by editing these files, so they can be refreshed from upstream. Libraries that need hex colours (shaders, contrast maths) get them from `palette` in `ui.tsx`, which mirrors `index.css`.

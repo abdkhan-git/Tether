@@ -10,7 +10,7 @@ use tether_core::content::HoldReason;
 use tether_core::{DeviceId, Timestamp};
 
 /// Bumped on any change to the messages below; both ends must match.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 /// Largest request a client may send.
 pub const MAX_REQUEST_BYTES: usize = 16 << 10;
 /// Largest reply or event the daemon sends (one clipboard item can be 1 MiB).
@@ -39,6 +39,12 @@ pub enum Request {
     Revoke {
         device: DeviceId,
     },
+    /// Pause or resume sync on this device. While paused, nothing copied here
+    /// is recorded or sent, and nothing from other devices is written to the
+    /// system clipboard (it still arrives in history). Kept across restarts.
+    SetPaused {
+        paused: bool,
+    },
     /// Turn this connection into a stream of [`Event`]s.
     Subscribe,
 }
@@ -57,6 +63,7 @@ pub enum Reply {
     PairCode(PairCode),
     Joined { device: DeviceId },
     Revoked,
+    Paused(bool),
     Subscribed,
 }
 
@@ -72,6 +79,8 @@ pub struct Status {
     /// UDP port the daemon listens on for other devices.
     pub port: u16,
     pub pairing_open: bool,
+    /// Sync is paused on this device (see [`Request::SetPaused`]).
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +89,10 @@ pub struct Device {
     /// Display only: chosen by the device itself, never trusted.
     pub name: String,
     pub state: DeviceState,
+    /// Smoothed QUIC round-trip time in microseconds, while connected.
+    pub rtt_us: Option<u32>,
+    /// Operations this device holds from it (its entry in the version vector).
+    pub ops: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +154,8 @@ pub enum Event {
     KeptLocal { kind: String },
     /// Membership, connections, nearby devices or the pairing window changed.
     DevicesChanged,
+    /// Sync was paused (`true`) or resumed on this device.
+    Paused(bool),
     /// This subscriber fell behind and missed events; refresh everything.
     Lagged { missed: u64 },
 }

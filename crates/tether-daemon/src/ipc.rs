@@ -102,6 +102,7 @@ async fn handle(ctx: &Ctx, quic: &quinn::Endpoint, request: Request) -> Result<R
             api::revoke(ctx, device)?;
             Reply::Revoked
         }
+        Request::SetPaused { paused } => Reply::Paused(api::set_paused(ctx, paused)?),
         Request::Subscribe => bail!("Subscribe is handled before this point"),
     })
 }

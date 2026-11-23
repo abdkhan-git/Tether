@@ -28,6 +28,11 @@ export interface TetherModule {
   note?: string;
   /** Core modules cannot be switched off. */
   core?: boolean;
+  /**
+   * The daemon implements what this module shows. Modules without it appear
+   * only in the browser preview; the desktop app lists them as coming.
+   */
+  daemon?: boolean;
   view?: ComponentType;
   commands?: () => Command[];
 }

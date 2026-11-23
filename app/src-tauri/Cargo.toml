@@ -1,0 +1,37 @@
+[package]
+name = "tether-app"
+description = "The Tether desktop app: window and tray, a client of tetherd's local control channel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "tether-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tether-core.workspace = true
+tether-ipc.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# The desktop shell (P1.6). `tray-icon` for the tray; the default features
+# bring the system webview (WebView2, WKWebView, WebKitGTK).
+tauri = { version = "2.11", features = ["tray-icon"] }
+# A second launch shows the running window instead of adding a second tray icon.
+tauri-plugin-single-instance = "2.4"
+# Opens validated http(s) and mailto links in the user's browser or mail app
+# (open_link). Not exposed to the page directly.
+open = "5"
+# Where the daemon's log goes (already in the tree through tetherd).
+dirs = "7"
+
+[dev-dependencies]
+serde_json = "1"

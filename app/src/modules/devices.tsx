@@ -1,29 +1,21 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { errorText } from "@/data/daemon";
 import { useTether } from "@/data/store";
 import type { Device } from "@/data/types";
 import { timeAgo } from "@/lib/format";
 import { osLabel } from "@/lib/platform";
 import SlideCommit from "@/components/rb/SlideCommit";
 import { Modal } from "@/components/Modal";
-import { Icon, icons } from "@/components/Icon";
-import { Card, Chip, ConnectionBadge, DeviceGlyph, IconButton, PageHeader, PrimaryAction, SectionLabel, useColors } from "@/components/ui";
+import { icons } from "@/components/Icon";
+import { Card, Chip, ConnectionBadge, DeviceGlyph, EmptyState, IconButton, PageHeader, Panel, PrimaryAction, SectionLabel, useColors } from "@/components/ui";
 import type { TetherModule } from "./types";
 
 const spring = { type: "spring", duration: 0.5, bounce: 0.15 } as const;
 
 function DeviceCard({ d, onRevoke }: { d: Device; onRevoke: (d: Device) => void }) {
-  const renameDevice = useTether((s) => s.renameDevice);
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(d.name);
   const offline = d.connection === "offline";
-
-  const commit = () => {
-    const n = name.trim();
-    if (n && n !== d.name) renameDevice(d.id, n);
-    else setName(d.name);
-    setEditing(false);
-  };
+  const detail = d.isMe ? "—" : offline ? (d.lastSeen ? `seen ${timeAgo(d.lastSeen)}` : "offline") : d.latencyMs !== null ? `${d.latencyMs.toFixed(1)} ms` : "—";
 
   return (
     <motion.li layout="position" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }} transition={spring}>
@@ -38,33 +30,17 @@ function DeviceCard({ d, onRevoke }: { d: Device; onRevoke: (d: Device) => void 
         </div>
 
         <div className="mt-6">
-          {editing ? (
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commit();
-                if (e.key === "Escape") {
-                  setName(d.name);
-                  setEditing(false);
-                }
-              }}
-              className="selectable w-full rounded-lg bg-muted px-2 py-0.5 text-[19px] font-medium tracking-tight outline-none"
-            />
-          ) : (
-            <button onClick={() => setEditing(true)} className="group flex items-center gap-2 text-left text-[19px] font-medium tracking-tight" aria-label={`Rename ${d.name}`}>
-              {d.name}
-              <Icon icon={icons.edit} size={14} className="text-subtle opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
-          )}
-          <p className="mt-1 text-[13px] text-muted-foreground">{osLabel[d.platform]}</p>
+          <p className="truncate text-[19px] font-medium tracking-tight" title={d.name}>
+            {d.name}
+          </p>
+          <p className="mt-1 text-[13px] text-muted-foreground">
+            {d.platform ? osLabel[d.platform] : "Paired device"} · {d.seq.toLocaleString()} {d.seq === 1 ? "operation" : "operations"}
+          </p>
         </div>
 
         <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
           <ConnectionBadge connection={d.connection} />
-          <span className="font-mono text-xs text-muted-foreground">{offline ? `seen ${timeAgo(d.lastSeen)}` : d.isMe ? "—" : `${d.latencyMs?.toFixed(1)} ms`}</span>
+          <span className="font-mono text-xs text-muted-foreground">{detail}</span>
         </div>
         <p className="mt-3 font-mono text-[11px] tracking-wide text-subtle" title="Compare on both devices to confirm you paired with the right one">
           {d.fingerprint}
@@ -94,10 +70,13 @@ function RevokeSheet({ device, onClose }: { device: Device | null; onClose: () =
               handleColor={c.danger}
               successColor={c.danger}
               dangerColor={c.danger}
-              onConfirm={() => new Promise((r) => setTimeout(r, 650))}
+              onConfirm={() => revokeDevice(device.id)}
               onDone={() => {
-                revokeDevice(device.id);
                 toast(`${device.name} was revoked`);
+                onClose();
+              }}
+              onError={(e: unknown) => {
+                toast(`Could not revoke ${device.name}`, errorText(e));
                 onClose();
               }}
             />
@@ -109,17 +88,22 @@ function RevokeSheet({ device, onClose }: { device: Device | null; onClose: () =
 }
 
 function DevicesView() {
-  const { devices, setPairOpen } = useTether();
+  const { devices, nearby, setPairOpen } = useTether();
   const [revoking, setRevoking] = useState<Device | null>(null);
   const others = devices.filter((d) => !d.isMe);
   const me = devices.filter((d) => d.isMe);
+  const online = others.filter((d) => d.connection !== "offline").length;
 
   return (
     <div>
       <PageHeader
         eyebrow="Devices"
         title="Your machines."
-        subtitle={`${others.filter((d) => d.connection !== "offline").length} of ${others.length} paired devices online. Each one is identified by a key that never leaves it.`}
+        subtitle={
+          others.length
+            ? `${online} of ${others.length} paired ${others.length === 1 ? "device" : "devices"} online. Each one is identified by a key that never leaves it.`
+            : "No other devices yet. Pair one and everything you copy follows you to it."
+        }
         actions={
           <PrimaryAction icon={icons.add} onClick={() => setPairOpen(true)}>
             Pair a device
@@ -134,6 +118,26 @@ function DevicesView() {
           ))}
         </AnimatePresence>
       </ul>
+      {devices.length === 0 && (
+        <Panel>
+          <EmptyState title="Waiting for the Tether service" hint="Your devices appear here once it answers." />
+        </Panel>
+      )}
+      {nearby.length > 0 && (
+        <section className="mt-10">
+          <SectionLabel>Nearby, not paired</SectionLabel>
+          <Panel className="divide-y divide-border">
+            {nearby.map((n) => (
+              <div key={n.id} className="flex items-center gap-3 px-5 py-3.5">
+                <DeviceGlyph platform={null} size={34} />
+                <span className="min-w-0 flex-1 truncate text-sm">{n.name}</span>
+                <span className="font-mono text-[11px] text-subtle">{n.id.slice(0, 12)}</span>
+              </div>
+            ))}
+          </Panel>
+          <p className="mt-3 px-1 text-xs text-subtle">These devices run Tether on your network. They can see nothing of yours until one of them enters a pairing code from this device.</p>
+        </section>
+      )}
       <RevokeSheet device={revoking} onClose={() => setRevoking(null)} />
     </div>
   );
@@ -144,8 +148,9 @@ export const devicesModule: TetherModule = {
   label: "Devices",
   icon: icons.wifi,
   group: "Network",
-  summary: "Pair, rename and revoke the machines that make up your Tether.",
+  summary: "Pair and revoke the machines that make up your Tether.",
   status: "stable",
+  daemon: true,
   core: true,
   view: DevicesView,
   commands: () => [{ id: "pair", label: "Pair a new device", keywords: "add code connect", run: () => useTether.getState().setPairOpen(true) }],

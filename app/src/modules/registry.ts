@@ -1,3 +1,4 @@
+import { useTether } from "@/data/store";
 import { clipboardModule } from "./clipboard";
 import { devicesModule } from "./devices";
 import { diagnosticsModule } from "./diagnostics";
@@ -13,3 +14,12 @@ import type { TetherModule } from "./types";
  * this list; the grid button in the title bar opens it.)
  */
 export const liveModules: TetherModule[] = [overviewModule, clipboardModule, transfersModule, workspacesModule, devicesModule, diagnosticsModule];
+
+/** The modules that can be used here: against the daemon, only those it implements. */
+export function usableModules(live: boolean): TetherModule[] {
+  return live ? liveModules.filter((m) => m.daemon) : liveModules;
+}
+
+export function useUsableModules(): TetherModule[] {
+  return usableModules(useTether((s) => s.backend.live));
+}

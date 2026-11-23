@@ -1,14 +1,18 @@
 # Tether frontend
 
-The desktop UI lives in [`app/`](../app): React 19 + TypeScript + Tailwind v4 + Motion. It is the UI half of the Tauri 2 app described in [DESIGN.md](DESIGN.md). Today it runs in a browser against preview data; the Tauri shell and the daemon client come next.
+The desktop UI lives in [`app/`](../app): React 19 + TypeScript + Tailwind v4 + Motion, in a Tauri 2 shell (`app/src-tauri`, the `tether-app` crate). Inside the app it shows live data from `tetherd`; in a plain browser it runs against preview data, so the design can be worked on without a daemon.
 
 ```sh
 cd app
 npm install
-npm run dev        # http://localhost:1420
+npm run app        # the desktop app (builds tetherd first), against the daemon
+npm run dev        # the browser preview at http://localhost:1420, sample data
 npm test           # unit tests (Vitest)
-npm run build      # typecheck + tests + production build
+npm run build      # typecheck + tests + production build of the page
+npm run app:build  # release app and installer (stages tetherd beside it)
 ```
+
+The app talks to the daemon for the `default` profile. Pass another with `npx tauri dev -- -- --profile left` (the second `--` hands the rest to the app), matching `tetherd --profile` and `tether --profile`. The first dev launch takes a while: Vite pre-bundles dependencies once.
 
 ## Design language
 
@@ -34,9 +38,9 @@ Tokens are in `app/src/index.css`. Libraries that need hex values (shaders, cont
 - **Search:** a field in the title bar that opens a results flyout below it, as in Windows 11. It is focused with `Ctrl+F` (`⌘F` on a Mac) or `/`. There is no Mac-style command palette.
 - **Wording:** "Copy to this PC", "Show in File Explorer"; on macOS, "this Mac" and "Finder".
 - **Notifications:** bottom-right, where Windows shows its own.
-- **This device:** its icon and default name follow the detected OS.
+- **This device:** its icon and default name follow the detected OS. Other devices do not report their OS yet, so they get a neutral computer icon and "Paired device".
 
-Inside Tauri, the OS plugin can replace the user-agent sniffing.
+User-agent sniffing is enough for this device inside the app too (WebView2 reports Windows, WKWebView macOS).
 
 ## Content-aware clipboard
 
@@ -95,13 +99,26 @@ Users can turn any non-core module off from the Modules page (the grid button in
 
 ## Data layer
 
-`app/src/data/store.ts` is a zustand store of devices, clips, transfers, workspaces and log operations. `startMockDaemon()` simulates peers copying text, transfer progress and latency jitter. Every figure on screen is preview data until the daemon is connected, and the UI says so where it matters (pairing, workspaces).
+`app/src/data/store.ts` is a zustand store of devices, clips, transfers, workspaces and log operations, plus a `Backend`: what the UI asks of whoever holds the data (revoke, pause, pair, join, older history, open a link).
 
-To connect the daemon, replace the mock actions with Tauri commands and feed daemon events into the same store. Types in `app/src/data/types.ts` mirror `tether-core` (`OpRow` is `(device, seq, ts, kind)`).
+- **In the desktop app** (`main.tsx` checks `inDesktopApp`), `live.ts` swaps in the daemon backend. `daemon.ts` is the typed bridge: one function per Tauri command, and listeners for `tether://event` (new copies, device changes, pause) and `tether://link` (whether the daemon can be reached). `map.ts` turns daemon shapes into UI shapes and is unit-tested. Round trips are re-read every 3 s while the window is visible.
+- **In a browser**, the preview backend and `startMockDaemon()` simulate peers copying text, transfer progress and latency jitter.
+
+Modules carry `daemon: true` when the daemon implements what they show (Overview, Clipboard, Devices, Diagnostics). Inside the app the others (Transfers, Workspaces) are listed under "Coming" on the Modules page instead of showing sample data. Clipboard actions the daemon cannot do yet (pin, keep local, push to a device, delete everywhere) are hidden in the app; they need merge rules in the log (P2).
+
+### The desktop shell (`app/src-tauri`)
+
+- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `open_link`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to `capabilities/main.json`; without all three the page cannot call it.
+- **Rules for the page** (SECURITY.md, "Desktop app"): no remote content, no inline `<style>` or `<script>` (the CSP blocks them), links only through `backend.openLink`, never `window.open` or `<a href>` to outside pages (the window refuses to navigate away from the app).
+- **Window:** closing it hides it to the tray. Tray menu: Open Tether, Pause sync, Quit Tether. Its state always comes from the daemon.
+- **Daemon:** if none answers for the profile, the app starts the `tetherd` next to its executable with `--managed`, which stops when the app does. Its log is `%LOCALAPPDATA%\Tether\logs\tetherd-<profile>.log`.
 
 ## Known gaps
 
-- No Tauri shell yet (window chrome, tray, Mica/vibrancy, global hotkey). The title bar already carries `data-tauri-drag-region`.
-- Pairing, file transfer and workspace capture are UI only; the daemon does not implement them yet.
-- The JS bundle is about 205 KB gzipped. That's fine for a local app, but worth code-splitting per module if it grows.
-- No automated UI tests yet.
+- Native window chrome for now: no Mica/vibrancy, no custom title bar, no global hotkey. The title bar still carries `data-tauri-drag-region` for later.
+- File transfer and workspace capture are UI only; the daemon does not implement them yet.
+- "Show in File Explorer" for copied paths is not offered: a network path from another device would leak the NTLM hash. It needs a local-paths-only check.
+- Other devices' OS, names you choose for them, and their version vectors are not reported by the daemon yet.
+- No start at login yet.
+- The JS bundle is about 245 KB gzipped. That's fine for a local app, but worth code-splitting per module if it grows.
+- No automated UI tests yet; the shell was checked by hand through the WebView2 DevTools protocol.

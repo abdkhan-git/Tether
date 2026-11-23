@@ -71,6 +71,10 @@ pub enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Stop syncing: copies here stay here, and other devices' copies only reach history.
+    Pause,
+    /// Start syncing again after `tether pause`.
+    Resume,
 }
 
 /// Which daemon to talk to, and the token that proves we may.
@@ -98,6 +102,8 @@ pub async fn run<W: Write, R: BufRead>(command: Command, target: &Target, out: &
         Command::Pair { no_wait } => pair_cmd(target, out, no_wait).await,
         Command::Join { code, addr } => join_cmd(target, out, code, addr).await,
         Command::Revoke { id, yes } => revoke_cmd(target, out, input, &id, yes).await,
+        Command::Pause => pause_cmd(target, out, true).await,
+        Command::Resume => pause_cmd(target, out, false).await,
     }
 }
 
@@ -181,6 +187,7 @@ async fn status_cmd<W: Write>(target: &Target, out: &mut W) -> Result<()> {
     writeln!(out, "Group        {} member(s), {} connected (root {})", s.members, s.connected, short(&s.root))?;
     writeln!(out, "Network      UDP port {}", s.port)?;
     writeln!(out, "Pairing      {}", if s.pairing_open { "open" } else { "closed" })?;
+    writeln!(out, "Sync         {}", if s.paused { "paused (run `tether resume`)" } else { "on" })?;
     if s.revoked {
         writeln!(out, "This device was removed from its group and does not sync. Pair it again to rejoin.")?;
     }
@@ -258,6 +265,7 @@ async fn watch_cmd<W: Write>(target: &Target, out: &mut W, count: Option<u32>) -
                 writeln!(out, "kept a copied {} on this device; it was not synced", safe(&kind, false))?
             }
             Event::DevicesChanged => names = self::names(&devices(&mut c).await?),
+            Event::Paused(paused) => writeln!(out, "sync {}", if paused { "paused" } else { "resumed" })?,
             Event::Lagged { missed } => writeln!(out, "missed {missed} events; run `tether history` to catch up")?,
         }
         out.flush()?;
@@ -299,6 +307,16 @@ async fn pair_cmd<W: Write>(target: &Target, out: &mut W, no_wait: bool) -> Resu
             bail!("the pairing window closed before a device joined (too many wrong codes?)");
         }
     }
+}
+
+async fn pause_cmd<W: Write>(target: &Target, out: &mut W, paused: bool) -> Result<()> {
+    let mut c = target.connect().await?;
+    match c.request(&Request::SetPaused { paused }).await? {
+        Reply::Paused(true) => writeln!(out, "Sync paused. Copies stay on this device until you run `tether resume`.")?,
+        Reply::Paused(false) => writeln!(out, "Sync resumed.")?,
+        r => return Err(unexpected(r)),
+    }
+    Ok(())
 }
 
 async fn join_cmd<W: Write>(target: &Target, out: &mut W, code: String, addr: Option<SocketAddr>) -> Result<()> {
@@ -375,6 +393,8 @@ mod tests {
             Command::History { limit: 5, full: true }
         );
         assert_eq!(parse(&["history"]).unwrap().command, Command::History { limit: 20, full: false });
+        assert_eq!(parse(&["pause"]).unwrap().command, Command::Pause);
+        assert_eq!(parse(&["resume"]).unwrap().command, Command::Resume);
         assert_eq!(parse(&["revoke", "abcd", "-y"]).unwrap().command, Command::Revoke { id: "abcd".into(), yes: true });
         assert_eq!(
             parse(&["join", "123456", "192.168.1.20:5000"]).unwrap().command,

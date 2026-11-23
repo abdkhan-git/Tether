@@ -78,7 +78,6 @@ const firstEmptyOf = (slots: string[]) => {
   return i === -1 ? slots.length - 1 : i;
 };
 const isFull = (slots: string[]) => slots.every(Boolean);
-const STYLE = '@keyframes code-slots-blink{0%,49.9%{opacity:1}50%,100%{opacity:0}}';
 
 const CodeSlots: React.FC<CodeSlotsProps> = ({
   length = 6,
@@ -429,7 +428,6 @@ const CodeSlots: React.FC<CodeSlotsProps> = ({
         } as CSSProperties
       }
     >
-      <style>{STYLE}</style>
       <div
         ref={rowRef}
         className="group/row relative inline-flex cursor-text touch-manipulation gap-[var(--cs-gap)] [-webkit-tap-highlight-color:transparent] [transition:opacity_200ms_ease] data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"

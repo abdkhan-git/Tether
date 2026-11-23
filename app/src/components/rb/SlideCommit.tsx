@@ -42,16 +42,6 @@ const SWELL = 1.03;
 const MIN_PENDING = 300;
 const EASE_OUT: [number, number, number, number] = [0.23, 1, 0.32, 1];
 const SHAKE = [0, -5, 5, -3, 3, -1, 0];
-const STYLE = `
-@keyframes sc-spin { to { transform: rotate(360deg); } }
-.sc-spinner { animation: sc-spin 1s linear infinite; animation-play-state: paused; }
-.sc-root[data-phase='pending'] .sc-spinner { animation-play-state: running; }
-@media (prefers-reduced-motion: reduce) {
-  .sc-spinner { animation: sc-breathe 1.4s ease-in-out infinite; animation-play-state: paused; }
-  .sc-root[data-phase='pending'] .sc-spinner { animation-play-state: running; }
-  @keyframes sc-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-}
-`;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const onColor = (hex: string) => {
@@ -351,7 +341,6 @@ const SlideCommit: React.FC<SlideCommitProps> = ({
         } as CSSProperties
       }
     >
-      <style>{STYLE}</style>
       <motion.div
         ref={trackRef}
         className="relative h-full w-full cursor-grab touch-none select-none [-webkit-touch-callout:none] [-webkit-tap-highlight-color:transparent] rounded-[var(--sc-radius)] [background:var(--sc-track)] group-data-[held]:cursor-grabbing group-data-[phase=pending]:cursor-default group-data-[phase=done]:cursor-default"

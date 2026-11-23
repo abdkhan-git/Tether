@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import * as mock from "./mock";
 import { contentOf } from "@/lib/content/detect";
-import type { Clip, Device, OpRow, Toast, Transfer, Workspace } from "./types";
+import type { Cursor } from "./daemon";
+import type { Clip, Device, LinkState, OpRow, PairCode, Toast, Transfer, Workspace } from "./types";
 
 type Theme = "dark" | "light";
 
@@ -27,10 +28,38 @@ function write(key: string, value: unknown) {
   }
 }
 
+/**
+ * What the UI asks of whoever holds the data: the daemon inside the desktop
+ * app (`live.ts`), or the preview below in a plain browser.
+ */
+export interface Backend {
+  /** Real data from tetherd, not preview data. */
+  live: boolean;
+  revoke(id: string): Promise<void>;
+  setPaused(paused: boolean): Promise<void>;
+  /** Open a pairing window on this device and return its code. */
+  pair(): Promise<PairCode>;
+  /** Join the device showing `code`, found nearby or at `addr` (ip:port). Resolves to its id. */
+  join(code: string, addr: string | null): Promise<string>;
+  /** Fetch the next page of older history, if there is one. */
+  loadOlder(): Promise<void>;
+  /** Open a web or email link in the user's browser or mail app. */
+  openLink(url: string): void;
+}
+
 export interface TetherState {
+  backend: Backend;
+  link: LinkState;
   me: string;
   devices: Device[];
+  /** Unpaired devices seen on the network (from the daemon). */
+  nearby: { id: string; name: string }[];
   clips: Clip[];
+  /** Where older history continues; null when all of it is loaded. */
+  historyNext: Cursor | null;
+  /** UDP port this device's daemon listens on (shown when pairing by address). */
+  port: number | null;
+  paused: boolean;
   transfers: Transfer[];
   workspaces: Workspace[];
   ops: OpRow[];
@@ -60,16 +89,44 @@ export interface TetherState {
   sendFile: (name: string, size: number, to: string) => void;
 
   captureWorkspace: (name: string) => void;
-  renameDevice: (id: string, name: string) => void;
-  revokeDevice: (id: string) => void;
+  revokeDevice: (id: string) => Promise<void>;
+  setPaused: (paused: boolean) => Promise<void>;
 }
 
 let toastId = 0;
 
+/** Preview data and behaviour, for the browser (no daemon there). */
+const previewBackend: Backend = {
+  live: false,
+  async revoke(id) {
+    useTether.setState((s) => ({ devices: s.devices.filter((d) => d.id !== id) }));
+  },
+  async setPaused(paused) {
+    useTether.setState({ paused });
+  },
+  async pair() {
+    const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
+    return { code: n.toString().padStart(6, "0"), validSecs: 120, attempts: 3 };
+  },
+  async join() {
+    throw new Error("Pairing needs the Tether desktop app. This browser preview shows sample data.");
+  },
+  async loadOlder() {},
+  openLink(url) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  },
+};
+
 export const useTether = create<TetherState>((set, get) => ({
+  backend: previewBackend,
+  link: { state: "connected" },
   me: mock.ME,
   devices: mock.devices,
+  nearby: [],
   clips: mock.clips.map((c) => ({ ...c, sensitive: c.sensitive || contentOf(c.text).sensitive })),
+  historyNext: null,
+  port: null,
+  paused: false,
   transfers: mock.transfers,
   workspaces: mock.workspaces,
   ops: mock.ops,
@@ -166,13 +223,13 @@ export const useTether = create<TetherState>((set, get) => ({
       ],
     })),
 
-  renameDevice: (id, name) => set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) })),
-  revokeDevice: (id) => set((s) => ({ devices: s.devices.filter((d) => d.id !== id) })),
+  revokeDevice: (id) => get().backend.revoke(id),
+  setPaused: (paused) => get().backend.setPaused(paused),
 }));
 
 /**
- * Stand-in for the daemon: peers copy things, transfers progress and latency
- * wobbles. Remove this when the Tauri client is wired up.
+ * Stand-in for the daemon in the browser preview: peers copy things,
+ * transfers progress and latency wobbles. The desktop app uses `live.ts`.
  */
 const NOMINAL_SPEED = 100_000_000;
 const baseLatency = new Map<string, number>();
@@ -190,7 +247,7 @@ export function startMockDaemon(): () => void {
     const c = mock.remoteCopies[copyIndex++ % mock.remoteCopies.length];
     const s = useTether.getState();
     const dev = s.devices.find((d) => d.id === c.device);
-    if (!dev || dev.connection === "offline") return;
+    if (!dev || dev.connection === "offline" || s.paused) return;
     s.addClip(c.device, c.text);
     s.toast(`Copied on ${dev.name}`);
   }, 14_000);

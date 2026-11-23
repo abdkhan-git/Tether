@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window: Tether's own commands, daemon events and matching the title bar to the theme. Nothing else: no file system, shell, HTTP or opener access, and nothing for remote pages.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-set-theme",
+    "allow-status",
+    "allow-devices",
+    "allow-history",
+    "allow-pair",
+    "allow-join",
+    "allow-revoke",
+    "allow-set-paused",
+    "allow-open-link"
+  ]
+}

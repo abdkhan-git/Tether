@@ -245,6 +245,6 @@ export const transfersModule: TetherModule = {
   group: "Sync",
   summary: "Direct, resumable file transfers. Drag a file onto a device.",
   status: "preview",
-  note: "Chunked transfer engine is Stage 3",
+  note: "Roadmap · P3",
   view: TransfersView,
 };
