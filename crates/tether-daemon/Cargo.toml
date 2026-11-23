@@ -38,4 +38,5 @@ tether-ipc.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+tether-cli.workspace = true
 tether-ipc.workspace = true

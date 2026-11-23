@@ -22,6 +22,7 @@ Before planning or changing anything, read:
 - `crates/tether-sim`: deterministic simulator and convergence invariants.
 - `crates/tether-os`: OS integration, the only crate allowed `unsafe` (every block has a `// SAFETY:` comment, enforced by clippy). Holds the owner-only local channel (named pipe / Unix socket).
 - `crates/tether-ipc`: the local control protocol (frames, mutual token handshake, requests/replies/events, client) used by the daemon, the CLI and the desktop app.
+- `crates/tether-cli`: the `tether` command (status, devices, history, watch, pair, join, revoke). A client of the control channel only; everything it prints from the daemon goes through `term::safe` (no terminal escapes).
 - `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion, Tauri shell not yet added). Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
 
 ## Commands
@@ -32,6 +33,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo run --release -p tether-sim -- --seeds 10000
 cargo run -p tether-daemon -- --stdin --profile left  # two daemons on one machine: /pair in one, /join CODE ADDR in the other
+cargo run -p tether-cli -- --profile left status      # the CLI, talking to that daemon over the control channel
 cd app && npm install && npm run dev                 # UI at http://localhost:1420
 cd app && npm run build                              # typecheck + tests + production build
 ```

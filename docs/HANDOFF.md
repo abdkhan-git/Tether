@@ -24,12 +24,13 @@ Keep this file short and factual. Every claim here should be something the code 
 
 ## Current state (2026-11-23)
 
-**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** step 1, encrypted storage, is committed (`9f6de96`); step 2, the local control channel, is done (not yet committed when this was written).
+**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** step 1, encrypted storage (`9f6de96`), and step 2, the local control channel (`2cc9f81`), are committed; step 3, the `tether` CLI, is done (not yet committed when this was written).
 
 Verified on Windows:
 
-- **Rust tests:** `cargo test --workspace` passes all 75: 34 core, 12 daemon unit (9 for the store), 6 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 7 `tether-os` and 2 simulator.
-- **Mutation check:** raising the client cap to 9, or making the server skip the client's proof, each makes a `control_e2e` test fail.
+- **Rust tests:** `cargo test --workspace` passes all 85: 6 `tether-cli`, 34 core, 12 daemon unit (9 for the store), 4 CLI end-to-end, 6 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 7 `tether-os` and 2 simulator.
+- **Mutation checks:** raising the client cap to 9, or making the server skip the client's proof, each makes a `control_e2e` test fail. Letting ESC through `term::safe` makes `cli_e2e::escape_sequences_from_a_peer_never_reach_the_terminal` fail.
+- **CLI, live:** the real `tether.exe` against a non-ephemeral daemon read the token from Credential Manager and ran `status`, `devices`, `history`, `pair --no-wait`, and a refused `revoke` of this device (exit code 1). With no daemon running it says "no control token for profile …: is tetherd running?". The test profile was deleted afterwards.
 - **Control channel, live:** a non-ephemeral `tetherd` created `\\.\pipe\tether-<SID>-<profile>`; `Get-Acl` showed the owner as the user, a protected DACL, and one entry (the user, FullControl). The token was in Credential Manager. The test profile and its credentials were deleted afterwards.
 - **Unix code:** `tether-os` passes clippy `-D warnings` for Linux and macOS, and `tether-ipc` for Linux, type-checked from Windows (`rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin`). The Unix tests have not run yet; CI will run them. The macOS check of `tether-ipc` cannot run from Windows (blake3 needs a C compiler for that target).
 - **Lints:** `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check` are clean.
@@ -63,7 +64,8 @@ Not verified yet:
 | Storage | `crates/tether-daemon/src/store.rs` (SQLite `tether.db` in `%LOCALAPPDATA%\Tether\<profile>`; every value sealed with XChaCha20-Poly1305 and bound to its row; re-verified on load; imports and deletes the old P0 `ops.log`), `keystore.rs` (device key and database key in the credential store) |
 | Commands | `crates/tether-daemon/src/api.rs` (what the daemon can be asked: status, devices, history paging, pair, join, revoke; shared by console and channel), `control.rs` (stdin console: `/pair`, `/join`, `/peers`, `/revoke`, `/whoami`, `/help`), `input.rs` (clipboard polled every 100 ms) |
 | Local control channel | `crates/tether-os/src/local.rs` + `local/windows.rs` (owner-only pipe, SID in the name, first-instance, the crate's only `unsafe`) and `local/unix.rs` (0600 socket in a checked 0700 dir, peer uid); `crates/tether-ipc` (`frame`, `auth` handshake, `proto`, `token` in the credential store, `client`); `crates/tether-daemon/src/ipc.rs` (server: 8 clients, 5 s auth, events via `Ctx::emit`) |
-| End-to-end tests | `crates/tether-daemon/tests/security_e2e.rs`, `control_e2e.rs`, shared harness in `tests/common/mod.rs` (`Daemon::with_control` passes a token through `TETHER_CONTROL_TOKEN`) |
+| CLI | `crates/tether-cli/src/lib.rs` (`Cli`, `Command`, `Target`, `run` writes to any `Write` and reads prompts from any `BufRead`), `term.rs` (`safe` sanitiser, previews, "3 min ago"), `main.rs` (the `tether` binary) |
+| End-to-end tests | `crates/tether-daemon/tests/security_e2e.rs`, `control_e2e.rs`, `cli_e2e.rs` (CLI run in-process against real daemons), shared harness in `tests/common/mod.rs` (`Daemon::with_control` passes a token through `TETHER_CONTROL_TOKEN`) |
 | Simulator | `crates/tether-sim/src/lib.rs` (attacks, revocation, invariants), `main.rs` (parallel seeds) |
 | UI | `app/src/modules/*` (sample data only, not connected to the daemon), `app/src/lib/content/*` |
 | CI and supply chain | `.github/workflows/ci.yml`, `deny.toml` |
@@ -83,7 +85,9 @@ The steps below are in order, because each depends on the ones before it.
   - Mutual authentication: a fresh 256-bit token at each start, kept in the credential store as `control-token/<profile>` and removed on a clean shutdown. Each side proves it knows the token with keyed BLAKE3 over both nonces; the token is never sent. `--ephemeral` daemons take the token from `TETHER_CONTROL_TOKEN` and have no channel without it.
   - Limits: 8 clients, 5 s to authenticate, 16 KiB requests, 4 MiB replies, history pages of 100 items or about 2 MiB, 10 s write timeout, 256 queued events per subscriber (then `Lagged`).
   - API (`tether_ipc::proto`): `Status`, `Devices` (members and unpaired devices nearby), `History { before, limit }` with cursor paging, `Pair`, `Join`, `Revoke`, `Subscribe` (events: `Clipboard`, `HistoryChanged`, `KeptLocal`, `DevicesChanged`, `Lagged`).
-- [ ] **3. `tether` CLI** (new binary, for example `crates/tether-cli`). Commands: `tether status`, `tether devices`, `tether pair`, `tether join CODE [ADDR]`, `tether revoke ID`, `tether history`, plus `tether watch` (events). Use `tether_ipc::Client::connect(profile)`; resolve an ID prefix through `Request::Devices`, since `Revoke` takes a full `DeviceId`. It never reads the store directly.
+- [x] **3. `tether` CLI.** Done 2026-11-23 in `crates/tether-cli` (binary `tether`, global `--profile`). Threat model in SECURITY.md ("`tether` CLI").
+  - `status`; `devices`; `history [-n N] [--full]` (pages through the daemon 100 at a time); `watch [--count N]` (stops after N copies); `pair [--no-wait]` (by default waits until a new member appears or the window closes); `join CODE [ADDR]`; `revoke ID [--yes]` (a prefix of at least 4 characters naming one current member; asks y/N; refuses this device and already-revoked ones).
+  - Everything the daemon returns is printed through `term::safe`: C0/C1 controls and DEL become visible symbols, bidi controls become U+FFFD, and newlines are kept only with `--full`. Errors are sanitised too.
 - [ ] **4. OS clipboard change events** instead of polling every 100 ms.
   - Windows: `AddClipboardFormatListener`.
   - macOS: watch `changeCount` (there is no change notification).
@@ -138,3 +142,4 @@ The steps below are in order, because each depends on the ones before it.
 | 2026-11-23 | Handoff | Added this file; P1 broken into steps |
 | 2026-11-23 | P1.1 encrypted storage | Confirmed P0 has nothing open beyond its planned deferrals; SQLite with per-row XChaCha20-Poly1305; 52 tests; checked with the real Windows Credential Manager |
 | 2026-11-23 | P1.2 local control channel | New crates `tether-os` (owner-only pipe/socket) and `tether-ipc` (mutual token handshake, protocol, client); daemon `api.rs` shared by console and channel; 75 tests; live pipe ACL checked with `Get-Acl` |
+| 2026-11-23 | P1.3 `tether` CLI | New crate `tether-cli`; terminal-escape sanitiser; pair waits for the join; revoke confirms; 85 tests; real binary checked against a live daemon |

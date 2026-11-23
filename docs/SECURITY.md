@@ -172,6 +172,39 @@ Residual risk the user should know about: any program running as the same user c
   modes, which the tests read back.
 ```
 
+### `tether` CLI (P1.3)
+
+```
+Feature: the command-line client (crates/tether-cli): status, devices, history, watch,
+  pair, join, revoke.
+Capability it needs: none of its own; it is a client of the local control channel and can
+  do only what that channel allows.
+What an attacker gains if it is abused: through the CLI itself, little. The danger is in
+  what it prints: clipboard text and device names chosen by another device. A terminal
+  obeys escape sequences, so printed text could write the clipboard (OSC 52), retitle the
+  window, move the cursor to rewrite earlier lines (hiding a held command or faking a
+  prompt), or reorder text with bidi controls.
+Who could abuse it: a paired device that is compromised (content); a program squatting the
+  control endpoint (handled by the channel's mutual authentication).
+Mitigations:
+  - Every string that came from the daemon is passed through one sanitiser before printing:
+    C0 and C1 control characters (ESC included) and DEL become visible symbols; bidi
+    overrides, isolates and marks become U+FFFD; only newline is kept, and only in --full
+    output. One-line previews also show newlines as a symbol.
+  - Held items are labelled as held, with the reason.
+  - Revoke asks for confirmation (unless --yes) and needs an unambiguous id prefix of at
+    least 4 characters that names a current member, never this device.
+  - The CLI never reads the database or the keys; it uses tether_ipc::Client, which refuses
+    a server that cannot prove it knows the token.
+Limits: those of the control channel; history is fetched in pages of at most 100.
+Test or invariant proving the main property: tether-cli term::tests (escape sequences,
+  OSC 52, C1 controls, bidi characters), and tether-daemon tests/cli_e2e.rs (a peer copies
+  text containing an escape sequence; `tether history` and `tether watch` print no ESC byte).
+Residual risk the user should know about: --full prints long text verbatim apart from
+  control characters; a terminal with its own bugs in rendering ordinary Unicode is outside
+  this tool's control.
+```
+
 ## Threat model template (one per feature)
 
 ```

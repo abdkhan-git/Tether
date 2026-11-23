@@ -1,0 +1,21 @@
+[package]
+name = "tether-cli"
+description = "The tether command: control the Tether daemon from a terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tether"
+path = "src/main.rs"
+
+[dependencies]
+tether-core.workspace = true
+tether-ipc.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
