@@ -2664,6 +2664,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "blake3",
  "chacha20poly1305",
  "clap",
  "dirs",
@@ -2672,7 +2673,9 @@ dependencies = [
  "mdns-sd",
  "postcard",
  "quinn",
+ "quinn-proto",
  "rcgen",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

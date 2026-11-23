@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod backoff;
 pub mod clock;
 pub mod content;
 pub mod hlc;

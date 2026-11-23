@@ -62,9 +62,6 @@ pub struct State {
     pub name: String,
     /// Open connections, keyed by the peer's device key (from its certificate).
     pub peers: HashMap<DeviceId, Connection>,
-    /// Peers we are currently dialing, so repeated discovery events don't open
-    /// duplicate connections.
-    pub dialing: HashSet<DeviceId>,
     /// Devices seen on the LAN, trusted or not.
     pub nearby: HashMap<DeviceId, SocketAddr>,
     /// Names peers report about themselves (display only, never trusted).
@@ -126,7 +123,6 @@ impl Ctx {
             log,
             name: clean_name(&name),
             peers: HashMap::new(),
-            dialing: HashSet::new(),
             nearby: HashMap::new(),
             names: HashMap::new(),
             pairing: None,

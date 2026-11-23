@@ -7,12 +7,15 @@
 //! limit on streams per connection, timeouts on every read, and strict
 //! decoding of every message.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
-use tether_core::{Message, Op};
+use tether_core::backoff::{Outcome, Policy, Redial};
+use tether_core::{DeviceId, Message, Op};
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
@@ -29,11 +32,22 @@ const STREAM_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_STREAMS_PER_SECOND: u32 = 64;
 /// Upper bound on pages in one catch-up, so a misbehaving peer cannot keep us pulling forever.
 const MAX_PULL_PAGES: usize = 10_000;
+/// The reconnect loop looks again at least this often, even with nothing due.
+const RECHECK: Duration = Duration::from_secs(30);
 
 /// One endpoint both accepts and dials, on a single UDP port.
 pub fn make_endpoint(ctx: &Ctx, port: u16) -> Result<Endpoint> {
     let server = tls::server_config(&ctx.tls, ctx.gate.clone())?;
-    let mut endpoint = Endpoint::server(server, SocketAddr::from(([0, 0, 0, 0], port)))?;
+    // Stable across restarts (see `TlsIdentity`), so a restarted daemon can
+    // tell a peer still holding the old connection to drop it.
+    let mut config = quinn::EndpointConfig::default();
+    let cid_key = ctx.tls.cid_key;
+    config
+        .reset_key(ctx.tls.reset_key.clone())
+        .cid_generator(move || Box::new(quinn_proto::HashedConnectionIdGenerator::from_key(cid_key)));
+    let socket = std::net::UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port)))?;
+    let runtime = quinn::default_runtime().ok_or_else(|| anyhow!("no async runtime for QUIC"))?;
+    let mut endpoint = Endpoint::new(config, Some(server), socket, runtime)?;
     endpoint.set_default_client_config(tls::client_config(&ctx.tls, ctx.gate.clone(), Expect::AnyTrusted)?);
     Ok(endpoint)
 }
@@ -239,39 +253,90 @@ pub fn broadcast(ctx: &Ctx, op: Op) {
     }
 }
 
-/// Keep trusted nearby devices connected: dial any we are not connected to.
-/// The lower device id dials, so a pair never opens two connections.
+/// Something to keep a connection to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Target {
+    /// A trusted device seen nearby.
+    Device(DeviceId),
+    /// An address from `--peer`, dialled while no device is connected.
+    Addr(SocketAddr),
+}
+
+/// The targets that should be connected now, with where to reach them.
+/// Of two devices, only the one with the lower id dials, so a pair never
+/// opens two connections.
+fn wanted(ctx: &Ctx, explicit: &[SocketAddr]) -> HashMap<Target, SocketAddr> {
+    let trusted = ctx.gate.read().map(|g| g.trusted.clone()).unwrap_or_default();
+    let s = ctx.lock();
+    let me = s.log.me();
+    let mut out: HashMap<Target, SocketAddr> = s
+        .nearby
+        .iter()
+        .filter(|(d, _)| trusted.contains(d) && me < **d && !s.peers.contains_key(d))
+        .map(|(d, a)| (Target::Device(*d), *a))
+        .collect();
+    if s.peers.is_empty() {
+        out.extend(explicit.iter().map(|a| (Target::Addr(*a), *a)));
+    }
+    out
+}
+
+fn random() -> u64 {
+    getrandom::u64().unwrap_or(0)
+}
+
+/// Keep trusted devices connected, redialling with exponential backoff and
+/// jitter (`tether_core::backoff`). The loop sleeps until the next dial is
+/// due or the set of devices changes (discovered, connected, disconnected,
+/// trusted or revoked), so a device that appears is dialled at once.
 pub async fn reconnect_loop(ctx: Ctx, endpoint: Endpoint, explicit: Vec<SocketAddr>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    let start = Instant::now();
+    let now_ms = move || start.elapsed().as_millis() as u64;
+    let mut redial: Redial<Target> = Redial::new(Policy::default());
+    let mut changes = ctx.events.subscribe();
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(Target, Outcome)>();
     loop {
-        tick.tick().await;
-        let targets: Vec<(Option<tether_core::DeviceId>, SocketAddr)> = {
-            let mut s = ctx.lock();
-            let me = s.log.me();
-            let mut t: Vec<_> = Vec::new();
-            let nearby: Vec<_> = s.nearby.iter().map(|(d, a)| (*d, *a)).collect();
-            for (device, addr) in nearby {
-                let trusted = ctx.gate.read().map(|g| g.trusted.contains(&device)).unwrap_or(false);
-                if trusted && me < device && !s.peers.contains_key(&device) && s.dialing.insert(device) {
-                    t.push((Some(device), addr));
-                }
-            }
-            if s.peers.is_empty() {
-                t.extend(explicit.iter().map(|a| (None, *a)));
-            }
-            t
-        };
-        for (device, addr) in targets {
-            let (ctx, endpoint) = (ctx.clone(), endpoint.clone());
+        let wanted = wanted(&ctx, &explicit);
+        let now = now_ms();
+        redial.want(wanted.keys().copied(), now);
+        for target in redial.due(now) {
+            let Some(addr) = wanted.get(&target).copied() else {
+                redial.finished(&target, Outcome::Failed, now, random());
+                continue;
+            };
+            let (ctx, endpoint, done) = (ctx.clone(), endpoint.clone(), done_tx.clone());
             tokio::spawn(async move {
-                let expect = device.map(Expect::Device).unwrap_or(Expect::AnyTrusted);
-                if let Err(e) = connect(ctx.clone(), endpoint, addr, expect).await {
-                    debug!(%addr, error = %e, "could not connect");
-                }
-                if let Some(d) = device {
-                    ctx.lock().dialing.remove(&d);
-                }
+                let started = Instant::now();
+                let expect = match target {
+                    Target::Device(d) => Expect::Device(d),
+                    Target::Addr(_) => Expect::AnyTrusted,
+                };
+                let outcome = match connect(ctx, endpoint, addr, expect).await {
+                    Ok(()) => Outcome::Ended { lasted_ms: started.elapsed().as_millis() as u64 },
+                    Err(e) => {
+                        debug!(%addr, error = %e, "could not connect");
+                        Outcome::Failed
+                    }
+                };
+                let _ = done.send((target, outcome));
             });
+        }
+        let wait =
+            redial.next_due().map_or(RECHECK, |at| Duration::from_millis(at.saturating_sub(now_ms()))).min(RECHECK);
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            Some((target, outcome)) = done_rx.recv() => {
+                let now = now_ms();
+                redial.finished(&target, outcome, now, random());
+                if let (Some(failures @ 1..), Some(at)) = (redial.failures(&target), redial.due_at(&target)) {
+                    debug!(?target, failures, retry_in_ms = at.saturating_sub(now), "backing off");
+                }
+            }
+            changed = changes.recv() => {
+                if let Err(broadcast::error::RecvError::Closed) = changed {
+                    return;
+                }
+            }
         }
     }
 }

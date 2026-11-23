@@ -244,6 +244,40 @@ Residual risk the user should know about: an app that marks nothing and whose co
   falls back to polling every 100 ms.
 ```
 
+### Reconnect with backoff (P1.5)
+
+```
+Feature: redialling trusted devices after a failure or a lost connection
+  (crates/tether-core/src/backoff.rs for the schedule, crates/tether-daemon/src/net.rs for the
+  loop, crates/tether-daemon/src/tls.rs for the QUIC keys that survive a restart).
+Capability it needs: none new.
+What an attacker gains if it is abused: a device that dials too eagerly can be used to
+  amplify traffic or drain a laptop's battery; one that gives up too easily can be kept
+  offline. New keys derived from the device key must not weaken the device key.
+Who could abuse it: a peer or network that accepts and immediately drops connections; an
+  on-path attacker forging QUIC stateless resets.
+Mitigations:
+  - Exponential backoff from 1 s to 30 s with equal jitter (each wait is uniform in
+    [ceiling/2, ceiling]), so devices that lost the network together do not retry in lockstep.
+  - A session shorter than 30 s counts as a failure, so accept-then-drop cannot cause a tight loop.
+  - A target is never dialled twice at once (property-tested); `--peer` addresses go
+    through the same schedule (before, they could pile up concurrent dials).
+  - The stateless reset key and the connection ID key are derived from the device key with
+    BLAKE3's KDF under their own context strings: one-way, so neither reveals the device key.
+    Forging a reset needs the reset key; holding it allows only closing our connections,
+    which an on-path attacker can already do by dropping packets. quinn rate-limits resets.
+  - Keep-alive every 5 s, 15 s idle timeout: a vanished peer is noticed within 15 s.
+Limits: at most one dial in flight per target; delays capped at 30 s; the loop re-checks at
+  least every 30 s.
+Test or invariant proving the main property: tether-core backoff::tests (ceilings, jitter
+  bounds and spread as properties, no double dials under any sequence of events, flapping
+  counts as failure); tether-daemon tests/reconnect_e2e.rs, #[ignore]d because it uses the
+  credential store, run by hand (a hard-killed peer that comes back is reconnected in 0.9 s
+  after a quick restart and 2.8 s after a 25 s outage).
+Residual risk the user should know about: while a device is unreachable, its peers keep
+  retrying every 15 to 30 s or so (a failed dial also waits out the 10 s handshake timeout).
+```
+
 ## Threat model template (one per feature)
 
 ```

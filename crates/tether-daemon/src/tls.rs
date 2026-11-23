@@ -46,6 +46,33 @@ pub type SharedGate = Arc<RwLock<Gate>>;
 pub struct TlsIdentity {
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
+    /// Key for QUIC stateless reset tokens (RFC 9000 §10.3), derived from the
+    /// device key so it survives a restart: when a peer keeps talking to us
+    /// over a connection that died with the old process, the new process can
+    /// prove the connection is gone and the peer reconnects at once, instead
+    /// of waiting out the idle timeout. Anyone holding it could only reset
+    /// our connections, and deriving it reveals nothing about the device key.
+    pub reset_key: Arc<dyn quinn::crypto::HmacKey>,
+    /// Key of the connection ID generator, also stable across restarts.
+    /// quinn checks a packet's connection ID against it before considering a
+    /// stateless reset, so with a fresh random key per process the restarted
+    /// daemon would silently drop the old connection's packets instead.
+    /// Not a secret: it only filters out stray packets cheaply.
+    pub cid_key: u64,
+}
+
+/// Domain separation for the keys derived from the device key.
+const RESET_KEY_CONTEXT: &str = "tether 2026-11-23 quic stateless reset key v1";
+const CID_KEY_CONTEXT: &str = "tether 2026-11-23 quic connection id key v1";
+
+fn reset_key(key: &DeviceKey) -> Arc<dyn quinn::crypto::HmacKey> {
+    let derived = Zeroizing::new(blake3::derive_key(RESET_KEY_CONTEXT, key.secret().as_ref()));
+    Arc::new(ring::hmac::Key::new(ring::hmac::HMAC_SHA256, derived.as_ref()))
+}
+
+fn cid_key(key: &DeviceKey) -> u64 {
+    let derived = Zeroizing::new(blake3::derive_key(CID_KEY_CONTEXT, key.secret().as_ref()));
+    u64::from_le_bytes(derived[..8].try_into().expect("8 bytes"))
 }
 
 /// PKCS#8 v1 encoding of an Ed25519 private key (RFC 8410).
@@ -66,7 +93,12 @@ pub fn identity(key: &DeviceKey) -> Result<TlsIdentity> {
     let cert = rcgen::CertificateParams::new(vec!["tether".to_string()])?
         .self_signed(&pair)
         .context("creating the device certificate")?;
-    let id = TlsIdentity { cert: cert.der().clone(), key: PrivateKeyDer::Pkcs8(pkcs8) };
+    let id = TlsIdentity {
+        cert: cert.der().clone(),
+        key: PrivateKeyDer::Pkcs8(pkcs8),
+        reset_key: reset_key(key),
+        cid_key: cid_key(key),
+    };
     if device_id_of(&id.cert) != Some(key.id()) {
         return Err(anyhow!("the device certificate does not carry the device key"));
     }
@@ -234,10 +266,13 @@ impl ServerCertVerifier for ServerVerifier {
 }
 
 /// Limits on every connection: few streams, bounded windows, idle timeout.
+/// A keep-alive every 5 s; three missed ones (15 s) end the connection, so a
+/// peer that vanished without closing (crash, sleep, cable) is noticed and
+/// the reconnect loop takes over.
 pub fn transport() -> Arc<TransportConfig> {
     let mut t = TransportConfig::default();
     t.keep_alive_interval(Some(Duration::from_secs(5)));
-    t.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(30_000))));
+    t.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(15_000))));
     t.max_concurrent_bidi_streams(VarInt::from_u32(16));
     t.max_concurrent_uni_streams(VarInt::from_u32(0));
     t.stream_receive_window(VarInt::from_u32((MAX_FRAME + 64 * 1024) as u32));

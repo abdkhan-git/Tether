@@ -72,6 +72,7 @@ Clipboard history is ordered by hybrid logical clock time with the device id as 
 - [x] Authenticated local control channel: owner-only named pipe / Unix socket, mutual token handshake
 - [x] `tether` CLI over that channel: status, devices, history, watch, pair, join, revoke (output sanitised against terminal escapes)
 - [x] Clipboard change notifications instead of polling (Windows and X11; macOS reads its change counter every 50 ms); copies that password managers mark private never sync
+- [x] Reconnect with exponential backoff and jitter; a restarted peer is redialled in about a second (QUIC stateless reset keys derived from the device key)
 - [ ] Desktop app wired to the daemon over that channel (P1)
 - [ ] Benchmarks: copy-to-paste latency p50/p99 between two real machines
 
@@ -82,5 +83,6 @@ Clipboard history is ordered by hybrid logical clock time with the device id as 
 | Clipboard copy to peer (LAN), p50 | < 50 ms | not yet measured between two machines |
 | Clipboard copy to peer (LAN), p99 | < 150 ms | not yet measured between two machines |
 | Clipboard copy to peer, one machine (loopback QUIC) | — | p50 4.0 ms, p95 5.4 ms, max 6.3 ms over 20 copies: from writing the clipboard on daemon A to daemon B printing it, including change detection, signing, QUIC and verification (`clipboard_e2e`, release build, Windows 11, Intel Core i7-1265U) |
+| Reconnect after a peer restarts (loopback) | — | 0.9 s after a hard-killed peer is back from a 6 s outage (stateless reset; 14 s without the derived connection ID key, which waits for the idle timeout); 2.8 s after a 25 s outage (backoff) (`reconnect_e2e`, one run each, debug build, Windows 11, Intel Core i7-1265U) |
 | Clipboard change detection (Windows) | — | p50 1.1 ms, p99 7.6 ms over 100 copies: from the start of a clipboard write to the listener's callback (`tether-os` ignored test, release build, same machine). The 100 ms polling it replaces waits 50 ms on average by design (not measured). |
 | Simulated seeds per CI run, violations | 10,000, 0 | 10,000 seeds, 0 violations: 2.0M ops, 201k network faults, 149k attacks, 3,923 revocations (Windows 11, 12 threads, release build, 206 s) |
