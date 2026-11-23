@@ -2,6 +2,12 @@
 
 Peer-to-peer, end-to-end encrypted sync for clipboard, files and workspaces across Windows, macOS and Linux. Rust core on a replicated operation log, verified by a deterministic simulator.
 
+## Continuing work
+
+When the owner says "let's continue" (or starts a new session without a specific task), read [docs/HANDOFF.md](docs/HANDOFF.md) first. It holds the current state, the next unchecked step, open decisions and the working agreements. Check it against the code (`git log`, the files it names) before acting. At the end of every task or session, update HANDOFF.md: tick finished steps, rewrite "Current state" and "Next up", add a session-log line. The owner runs git: give commands, never commit, no Claude attribution.
+
+## Reference docs
+
 Before planning or changing anything, read:
 
 - [docs/DESIGN.md](docs/DESIGN.md): the full design doc (architecture, sync protocol, security, roadmap).
