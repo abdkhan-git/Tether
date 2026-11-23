@@ -31,7 +31,7 @@ function DeviceCard({ d, onRevoke }: { d: Device; onRevoke: (d: Device) => void 
         <div className="flex items-start justify-between gap-3">
           <DeviceGlyph platform={d.platform} size={52} online={!offline} />
           {d.isMe ? (
-            <Chip className="bg-accent-soft text-accent">This device</Chip>
+            <Chip>This device</Chip>
           ) : (
             <IconButton icon={icons.revoke} label="Revoke access" tone="danger" onClick={() => onRevoke(d)} />
           )}

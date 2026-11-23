@@ -36,7 +36,7 @@ export function Modal({ open, onClose, title, children, width = 440 }: { open: b
             className="glass max-w-full rounded-[28px] p-7 shadow-[var(--shadow-lift)]"
           >
             <div className="mb-5 flex items-start justify-between gap-4">
-              <h2 className="display text-[28px] text-foreground">{title}</h2>
+              <h2 className="text-[22px] font-semibold tracking-tight text-foreground">{title}</h2>
               <IconButton icon={icons.close} label="Close" onClick={onClose} className="-mt-1 -mr-2" />
             </div>
             {children}

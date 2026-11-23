@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as mock from "./mock";
+import { contentOf } from "@/lib/content/detect";
 import type { Clip, Device, OpRow, Toast, Transfer, Workspace } from "./types";
 
 type Theme = "dark" | "light";
@@ -49,7 +50,8 @@ export interface TetherState {
   toast: (message: string, description?: string) => void;
   dismissToast: (id: number) => void;
 
-  addClip: (device: string, kind: Clip["kind"], text: string) => void;
+  /** Clips that look like secrets are kept on this device automatically. */
+  addClip: (device: string, text: string) => void;
   updateClip: (id: string, patch: Partial<Clip>) => void;
   deleteClip: (id: string) => void;
 
@@ -67,7 +69,7 @@ let toastId = 0;
 export const useTether = create<TetherState>((set, get) => ({
   me: mock.ME,
   devices: mock.devices,
-  clips: mock.clips,
+  clips: mock.clips.map((c) => ({ ...c, sensitive: c.sensitive || contentOf(c.text).sensitive })),
   transfers: mock.transfers,
   workspaces: mock.workspaces,
   ops: mock.ops,
@@ -104,7 +106,7 @@ export const useTether = create<TetherState>((set, get) => ({
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
-  addClip: (device, kind, text) =>
+  addClip: (device, text) =>
     set((s) => {
       const ts = Date.now();
       const dev = s.devices.find((d) => d.id === device);
@@ -118,7 +120,7 @@ export const useTether = create<TetherState>((set, get) => ({
         ts,
       };
       return {
-        clips: [{ id: `c${ts}`, device, ts, kind, text, pinned: false, sensitive: false, fresh: true }, ...s.clips],
+        clips: [{ id: `c${ts}`, device, ts, text, pinned: false, sensitive: contentOf(text).sensitive, fresh: true }, ...s.clips],
         devices: s.devices.map((d) => (d.id === device ? { ...d, seq } : d)),
         ops: [op, ...s.ops].slice(0, 40),
       };
@@ -189,7 +191,7 @@ export function startMockDaemon(): () => void {
     const s = useTether.getState();
     const dev = s.devices.find((d) => d.id === c.device);
     if (!dev || dev.connection === "offline") return;
-    s.addClip(c.device, c.kind, c.text);
+    s.addClip(c.device, c.text);
     s.toast(`Copied on ${dev.name}`);
   }, 14_000);
 

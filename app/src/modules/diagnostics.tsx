@@ -140,7 +140,7 @@ function DiagnosticsView() {
               <motion.div
                 key={`${o.device}:${o.seq}`}
                 layout="position"
-                initial={{ opacity: 0, y: -10, backgroundColor: "var(--accent-soft)" }}
+                initial={{ opacity: 0, y: -10, backgroundColor: "var(--muted)" }}
                 animate={{ opacity: 1, y: 0, backgroundColor: "rgba(0,0,0,0)" }}
                 transition={{ type: "spring", duration: 0.6, bounce: 0.1, backgroundColor: { duration: 1.6 } }}
                 className="grid grid-cols-[minmax(0,170px)_70px_minmax(0,1fr)_110px_80px] items-center gap-4 border-b border-border px-5 py-3 font-mono text-xs last:border-b-0"

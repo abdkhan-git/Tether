@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "@fontsource-variable/geist";
-@import "@fontsource-variable/cormorant-garamond";
 @import "@fontsource/ibm-plex-mono/400.css";
 @import "@fontsource/ibm-plex-mono/500.css";
 
@@ -8,52 +7,71 @@
 
 /*
  * Tether design tokens.
- * Token names follow the portfolio so the two read as one family; the palette
- * is Tether's own: warm obsidian + champagne, with a soft green reserved for
- * "connected". Surfaces layer (background < surface < surface-2 < glass) and
- * separate with hairlines, not shadows.
+ * Neutral graphite, the way Apple's own apps look in dark mode. Colour is a
+ * signal, not decoration: green means connected / live / done, red means
+ * destructive. Selection and hover are neutral. Token names follow the portfolio.
  */
 :root {
-  --background: #f3f1ec;
-  --foreground: #1b1915;
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
   --surface: #ffffff;
-  --surface-2: #faf8f4;
-  --glass: rgba(255, 255, 255, 0.66);
-  --muted: rgba(27, 25, 21, 0.055);
-  --muted-foreground: #6c675d;
-  --subtle: #a29c8f;
-  --accent: #96692b;
+  --surface-2: #fafafa;
+  --glass: rgba(255, 255, 255, 0.72);
+  --muted: rgba(0, 0, 0, 0.045);
+  --muted-foreground: #6e6e73;
+  --subtle: #a1a1a6;
+  --accent: #248a3d;
   --accent-foreground: #ffffff;
-  --accent-soft: rgba(150, 105, 43, 0.12);
-  --positive: #2b8a57;
-  --destructive: #c2433a;
-  --border: rgba(27, 25, 21, 0.09);
-  --border-hover: rgba(27, 25, 21, 0.2);
-  --ring: rgba(150, 105, 43, 0.5);
-  --ambient: rgba(190, 140, 70, 0.16);
-  --shadow-lift: 0 1px 2px rgba(27, 25, 21, 0.04), 0 24px 48px -24px rgba(27, 25, 21, 0.22);
+  --accent-soft: rgba(36, 138, 61, 0.1);
+  --positive: #248a3d;
+  --destructive: #d70015;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.16);
+  --ring: rgba(0, 0, 0, 0.28);
+  --sheen: rgba(255, 255, 255, 0.7);
+  --shadow-lift: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 32px -16px rgba(0, 0, 0, 0.14);
   --radius: 1rem;
+
+  /* Syntax colours, after Xcode's default light theme. */
+  --syn-keyword: #9b2393;
+  --syn-string: #c41a16;
+  --syn-number: #1c00cf;
+  --syn-comment: #707f8c;
+  --syn-type: #0b4f79;
+  --syn-function: #326d74;
+  --syn-attr: #815f03;
+  --syn-meta: #643820;
 }
 
 [data-theme="dark"] {
-  --background: #08080a;
-  --foreground: #f3efe8;
-  --surface: #111113;
-  --surface-2: #17171a;
-  --glass: rgba(22, 22, 25, 0.62);
+  --background: #0f0f11;
+  --foreground: #f2f2f4;
+  --surface: #18181b;
+  --surface-2: #1f1f23;
+  --glass: rgba(30, 30, 34, 0.72);
   --muted: rgba(255, 255, 255, 0.06);
-  --muted-foreground: #a29d93;
-  --subtle: #6c685f;
-  --accent: #dcbc82;
-  --accent-foreground: #15110a;
-  --accent-soft: rgba(220, 188, 130, 0.13);
-  --positive: #7fd6a2;
-  --destructive: #ef7d70;
-  --border: rgba(255, 255, 255, 0.075);
-  --border-hover: rgba(255, 255, 255, 0.2);
-  --ring: rgba(220, 188, 130, 0.55);
-  --ambient: rgba(214, 170, 100, 0.13);
-  --shadow-lift: 0 24px 56px -24px rgba(0, 0, 0, 0.85);
+  --muted-foreground: #a0a0a8;
+  --subtle: #6b6b73;
+  --accent: #30d158;
+  --accent-foreground: #0b0b0c;
+  --accent-soft: rgba(48, 209, 88, 0.12);
+  --positive: #30d158;
+  --destructive: #ff6961;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.18);
+  --ring: rgba(255, 255, 255, 0.32);
+  --sheen: rgba(255, 255, 255, 0.035);
+  --shadow-lift: 0 16px 40px -20px rgba(0, 0, 0, 0.7);
+
+  /* Syntax colours, after Xcode's default dark theme. */
+  --syn-keyword: #ff7ab2;
+  --syn-string: #ff8170;
+  --syn-number: #d9c97c;
+  --syn-comment: #7f8c98;
+  --syn-type: #6bdfff;
+  --syn-function: #67b7a4;
+  --syn-attr: #ffa14f;
+  --syn-meta: #fd8f3f;
 }
 
 @theme inline {
@@ -74,7 +92,6 @@
   --color-border-hover: var(--border-hover);
   --color-ring: var(--ring);
   --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-display: "Cormorant Garamond Variable", "New York", Georgia, serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
 }
 
@@ -100,7 +117,6 @@
     font-size: 14px;
     line-height: 1.5;
     letter-spacing: -0.011em;
-    font-feature-settings: "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -108,27 +124,14 @@
     transition: background-color 400ms ease, color 400ms ease;
   }
 
-  /* Ambient light and film grain sit behind everything. */
+  /* A faint top sheen gives the window depth without colour. */
   body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: -2;
-    pointer-events: none;
-    background:
-      radial-gradient(60rem 34rem at 50% -12%, var(--ambient), transparent 70%),
-      radial-gradient(40rem 28rem at 105% 108%, var(--ambient), transparent 70%);
-  }
-
-  body::after {
     content: "";
     position: fixed;
     inset: 0;
     z-index: -1;
     pointer-events: none;
-    opacity: 0.045;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background: radial-gradient(70rem 30rem at 50% -10%, var(--sheen), transparent 70%);
   }
 
   button {
@@ -148,7 +151,7 @@
   }
 
   ::selection {
-    background: var(--accent-soft);
+    background: rgba(128, 128, 140, 0.3);
   }
 }
 
@@ -157,20 +160,78 @@
   user-select: text;
 }
 
-/* Editorial serif for page titles and large figures. */
+/* Large titles and figures: tight, heavy, like SF Pro Display. */
 .display {
-  font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  line-height: 1.02;
+  font-family: var(--font-sans);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Hairline glass: translucent fill, blur, a lit top edge. */
 .glass {
   background: var(--glass);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
   backdrop-filter: blur(24px) saturate(160%);
-  box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* highlight.js token classes mapped onto the syntax palette. */
+.code .hljs-keyword,
+.code .hljs-built_in,
+.code .hljs-literal,
+.code .hljs-selector-tag,
+.code .hljs-doctag {
+  color: var(--syn-keyword);
+}
+.code .hljs-string,
+.code .hljs-regexp,
+.code .hljs-char,
+.code .hljs-template-tag,
+.code .hljs-addition {
+  color: var(--syn-string);
+}
+.code .hljs-number,
+.code .hljs-symbol,
+.code .hljs-bullet {
+  color: var(--syn-number);
+}
+.code .hljs-comment,
+.code .hljs-quote,
+.code .hljs-deletion {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.code .hljs-type,
+.code .hljs-class .hljs-title,
+.code .hljs-title.class_,
+.code .hljs-selector-class,
+.code .hljs-tag .hljs-name,
+.code .hljs-name {
+  color: var(--syn-type);
+}
+.code .hljs-title,
+.code .hljs-title.function_,
+.code .hljs-section {
+  color: var(--syn-function);
+}
+.code .hljs-attr,
+.code .hljs-attribute,
+.code .hljs-property,
+.code .hljs-variable,
+.code .hljs-params,
+.code .hljs-selector-id,
+.code .hljs-selector-attr {
+  color: var(--syn-attr);
+}
+.code .hljs-meta,
+.code .hljs-meta .hljs-keyword,
+.code .hljs-subst {
+  color: var(--syn-meta);
+}
+.code .hljs-punctuation,
+.code .hljs-operator {
+  color: var(--muted-foreground);
 }
 
 @media (prefers-reduced-motion: reduce) {

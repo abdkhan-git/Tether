@@ -6,20 +6,22 @@ The desktop UI lives in [`app/`](../app): React 19 + TypeScript + Tailwind v4 + 
 cd app
 npm install
 npm run dev        # http://localhost:1420
-npm run build      # typecheck + production build
+npm test           # unit tests (Vitest)
+npm run build      # typecheck + tests + production build
 ```
 
 ## Design language
 
-The aim is a premium, calm desktop app in the spirit of modern Apple software, and at home on Windows, where the owner works.
+A calm, professional desktop app in the spirit of Apple's own software, and at home on Windows, where the owner works.
 
 | Aspect | Decision |
 | --- | --- |
-| Palette | Warm obsidian (`#08080a`) with a champagne accent (`#dcbc82`) in dark mode; ivory and bronze in light. Soft green is reserved for "connected", coral for destructive actions. No purple or blue. |
-| Depth | Surfaces step up from background to surface to glass, separated by hairlines. A faint warm ambient light and film grain sit behind everything (`body::before` / `::after` in `index.css`). |
-| Type | Geist for interface text, Cormorant Garamond for page titles and large figures (lining numerals), IBM Plex Mono for IDs, speeds and code. Same families as the portfolio. |
+| Palette | Neutral graphite (`#0f0f11` dark, `#f5f5f7` light). Colour is a signal, never decoration: system green means connected, live or done; red means destructive. Selection, hover and primary buttons are neutral. No gold, no purple or blue. |
+| Depth | Surfaces step up from background to surface to glass, separated by hairlines, with a faint neutral sheen at the top of the window. Cards catch a barely visible neutral highlight under the cursor. |
+| Type | Geist throughout (semibold, tight tracking for titles and figures, like SF Pro Display), IBM Plex Mono for code, IDs and speeds. |
 | Navigation | A floating glass pill bar across the top (React Bits `PillNav`). There is no sidebar. |
-| Pages | Editorial header on each: small accent eyebrow, large serif title, one-line subtitle, at most one hero action. |
+| Pages | A small grey eyebrow, a bold title, a one-line subtitle, at most one primary action (an inverted pill). |
+| Code | Syntax colours follow Xcode's default themes (light and dark), defined as `--syn-*` tokens. |
 | Icons | Hugeicons (`@hugeicons/core-free-icons`), 1.5 px stroke, all named in `components/Icon.tsx`. |
 | Motion | Springs everywhere (around `duration: 0.5, bounce: 0.15`). Pages cross-fade with a slight blur; lists animate by layout; selection highlights glide. Respects `prefers-reduced-motion`. |
 
@@ -35,6 +37,27 @@ Tokens are in `app/src/index.css`. Libraries that need hex values (shaders, cont
 - **This device:** its icon and default name follow the detected OS.
 
 Inside Tauri, the OS plugin can replace the user-agent sniffing.
+
+## Content-aware clipboard
+
+The clipboard does not just store text: it works out what the text *is* and shows it accordingly. The engine lives in `app/src/lib/content/` and is pure TypeScript with unit tests (`content.test.ts`), so it can later move into the Rust core if the daemon needs it.
+
+| Detected | Shown as | Extras |
+| --- | --- | --- |
+| JSON | Pretty-printed, syntax-highlighted, line numbers | Shape summary (keys, depth, size); formatted / original toggle |
+| Code (18 languages) | Highlighted in the detected language | Real formatting for JS, TS, CSS, Markdown, YAML (Prettier) and SQL (sql-formatter); other languages get their indentation repaired, including the "copied from mid-line" case |
+| Link | Title for known sites (GitHub PRs, issues, files; YouTube), query parameters | Trackers (`utm_*`, `fbclid`, `gclid`, ...) flagged; copy without trackers |
+| Colour | Swatch | HEX, RGB, HSL conversions; WCAG contrast on white and black |
+| Date / timestamp | Local time and relative time | Unix seconds, milliseconds, ISO 8601, UTC |
+| Table (CSV, TSV, spreadsheet copy) | A real table | Copy as Markdown or JSON |
+| File path | Breadcrumb | Show in File Explorer / Finder; Windows ⇄ WSL path conversion |
+| JWT | Decoded header and payload | Expiry status; always kept on this device |
+| Secrets (AWS, GitHub, OpenAI, Anthropic, Stripe, Slack, Google keys, private keys, connection strings with passwords, password-like tokens) | Masked until revealed | Automatically marked sensitive, so they never sync |
+| Arithmetic | The answer | Copy result |
+| UUID, email | Clean value | Case and format variants; write an email |
+| Plain text | Readable text | Join lines broken mid-sentence (PDF copies); case conversions; word count |
+
+Detection order and rules are in `detect.ts`; language rules are in `language.ts`. Heuristics run first, with highlight.js auto-detection as a fallback only for text that looks like code. Formatters are loaded lazily, so they cost nothing until that language is copied. Results are cached per clip.
 
 ## Component libraries
 

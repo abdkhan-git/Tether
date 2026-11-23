@@ -17,13 +17,10 @@ export interface Device {
   fingerprint: string;
 }
 
-export type ClipKind = "text" | "link" | "code";
-
 export interface Clip {
   id: string;
   device: string;
   ts: number;
-  kind: ClipKind;
   text: string;
   pinned: boolean;
   /** Sensitive items never leave the device that copied them. */

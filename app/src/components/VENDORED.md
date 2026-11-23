@@ -10,15 +10,13 @@ Copied as source (shadcn-registry style), not installed as packages, so they can
 | Component | Used for |
 | --- | --- |
 | `rb/PillNav` | Top navigation (glass bar, gliding highlight) |
-| `rb/SpotlightCard` | `Card` surfaces that catch a light following the cursor |
-| `rb/SpecularButton` | `PrimaryAction`, the one hero button per page (WebGL edge highlight) |
+| `rb/SpotlightCard` | `Card` surfaces that catch a faint neutral sheen under the cursor |
 | `rb/WarmTooltip` | Icon-button tooltips; after the first, neighbours open instantly |
 | `rb/RubberSegment` | `Segmented` filters |
 | `rb/SquishSwitch` | `Switch` on the Modules page |
 | `rb/CodeSlots` | Entering a pairing code |
 | `rb/SlideCommit` | Slide-to-revoke a device |
 | `rb/SwipeToast` | Notifications, bottom-right like Windows |
-| `rb/BlurText` | Overview headline reveal |
 | `magic/animated-beam` | Device constellation on the Overview |
 | `magic/border-beam` | Light running round an active transfer |
 | `magic/number-ticker` | `Figure`, large springing numbers |

@@ -52,7 +52,7 @@ function TransferRow({ t, devices, me }: { t: Transfer; devices: Map<string, Dev
 
   return (
     <motion.li layout="position" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }} transition={spring} className="relative overflow-hidden rounded-[22px] border border-border bg-surface p-5">
-      {live && <BorderBeam size={120} duration={7} colorFrom={c.accent} colorTo={c.positive} />}
+      {live && <BorderBeam size={120} duration={7} colorFrom={c.positive} colorTo={c.ink} />}
       <div className="flex items-start gap-4">
         <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
           <Icon icon={icons.file} size={20} />
@@ -173,7 +173,7 @@ function TransfersView() {
                   setOver(null);
                   send(e.dataTransfer.files, p.id);
                 }}
-                className={cn("group rounded-[22px] border border-dashed p-4 text-left transition-[border-color,background-color,transform,opacity] duration-300 disabled:opacity-40", hot ? "scale-[1.02] border-accent bg-accent-soft" : "border-border hover:border-border-hover hover:bg-muted/50")}
+                className={cn("group rounded-[22px] border border-dashed p-4 text-left transition-[border-color,background-color,transform,opacity] duration-300 disabled:opacity-40", hot ? "scale-[1.02] border-foreground/40 bg-muted" : "border-border hover:border-border-hover hover:bg-muted/50")}
               >
                 <span className="flex items-center gap-3.5">
                   <DeviceGlyph platform={p.platform} size={44} online={!offline} />

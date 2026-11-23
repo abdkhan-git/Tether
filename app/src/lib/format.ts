@@ -45,3 +45,20 @@ export function median(values: number[]): number {
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
+
+/** "in 3 days", "2 hours ago", in the user's language. */
+export function relativeTime(date: Date, now = Date.now()): string {
+  const diff = date.getTime() - now;
+  const abs = Math.abs(diff);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const steps: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 365 * 864e5],
+    ["month", 30 * 864e5],
+    ["week", 7 * 864e5],
+    ["day", 864e5],
+    ["hour", 36e5],
+    ["minute", 6e4],
+  ];
+  for (const [unit, ms] of steps) if (abs >= ms) return rtf.format(Math.round(diff / ms), unit);
+  return rtf.format(Math.round(diff / 1000), "second");
+}

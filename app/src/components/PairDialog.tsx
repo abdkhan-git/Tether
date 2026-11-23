@@ -15,7 +15,7 @@ function Body({ onClose }: { onClose: () => void }) {
   const { c } = useColors();
   const code = useMemo(randomCode, []);
   const [mode, setMode] = useState<"show" | "enter">("show");
-  const slotProps = { accentColor: c.accent, inkColor: c.ink, slotColor: c.track, digitColor: c.ink, dangerColor: c.danger, slotSize: 48, gap: 8, radius: 14 };
+  const slotProps = { accentColor: c.ink, inkColor: c.ink, slotColor: c.track, digitColor: c.ink, dangerColor: c.danger, slotSize: 48, gap: 8, radius: 14 };
 
   return (
     <div className="flex flex-col gap-6">

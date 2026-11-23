@@ -16,7 +16,7 @@ function Row({ m, enabled, onToggle }: { m: TetherModule; enabled?: boolean; onT
         <div className="flex items-center gap-2">
           <span className="text-[14.5px] font-medium">{m.label}</span>
           {m.status === "preview" && <Chip>Preview</Chip>}
-          {m.status === "planned" && <Chip className={m.note === "Proposed" ? "" : "bg-accent-soft text-accent"}>{m.note}</Chip>}
+          {m.status === "planned" && <Chip>{m.note}</Chip>}
         </div>
         <p className="mt-0.5 text-[13px] text-muted-foreground">{m.summary}</p>
       </div>

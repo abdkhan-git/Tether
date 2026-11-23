@@ -21,7 +21,7 @@ export function Toasts() {
           radius={18}
           background="var(--surface-2)"
           color="var(--foreground)"
-          fuseColor="var(--accent)"
+          fuseColor="var(--subtle)"
           onClose={() => dismiss(t.id)}
         />
       ))}

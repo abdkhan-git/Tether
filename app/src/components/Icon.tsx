@@ -39,6 +39,17 @@ import {
   GridViewIcon,
   Home01Icon,
   PencilEdit01Icon,
+  BracesIcon,
+  PaintBoardIcon,
+  Clock01Icon,
+  Table01Icon,
+  Mail01Icon,
+  CalculatorIcon,
+  IdIcon,
+  TextIcon,
+  ArrowUpRight01Icon,
+  MagicWand01Icon,
+  TextWrapIcon,
 } from "@hugeicons/core-free-icons";
 import type { Connection, Platform } from "@/data/types";
 
@@ -80,6 +91,17 @@ export const icons = {
   grid: GridViewIcon,
   home: Home01Icon,
   edit: PencilEdit01Icon,
+  braces: BracesIcon,
+  palette: PaintBoardIcon,
+  clock: Clock01Icon,
+  table: Table01Icon,
+  mail: Mail01Icon,
+  calculator: CalculatorIcon,
+  id: IdIcon,
+  text: TextIcon,
+  external: ArrowUpRight01Icon,
+  wand: MagicWand01Icon,
+  wrap: TextWrapIcon,
 } as const;
 
 export const platformGlyph: Record<Platform, typeof ComputerIcon> = {

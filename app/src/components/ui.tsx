@@ -5,7 +5,6 @@ import type { Connection, Platform } from "@/data/types";
 import SpotlightCard from "./rb/SpotlightCard";
 import SquishSwitch from "./rb/SquishSwitch";
 import RubberSegment from "./rb/RubberSegment";
-import SpecularButton from "./rb/SpecularButton";
 import WarmTooltip, { WarmTooltipGroup } from "./rb/WarmTooltip";
 import { NumberTicker } from "./magic/number-ticker";
 import { Icon, connectionGlyph, icons, platformGlyph } from "./Icon";
@@ -14,8 +13,8 @@ export { WarmTooltipGroup };
 
 /** Concrete colours for libraries that need hex (shaders, contrast maths). Mirrors index.css. */
 export const palette = {
-  dark: { accent: "#dcbc82", accentInk: "#15110a", surface: "#111113", ink: "#f3efe8", track: "#1b1b1e", muted: "#a29d93", positive: "#7fd6a2", danger: "#ef7d70" },
-  light: { accent: "#96692b", accentInk: "#ffffff", surface: "#ffffff", ink: "#1b1915", track: "#ebe8e1", muted: "#6c675d", positive: "#2b8a57", danger: "#c2433a" },
+  dark: { accent: "#30d158", ink: "#f2f2f4", surface: "#18181b", raised: "#2c2c31", track: "#2a2a2f", muted: "#a0a0a8", positive: "#30d158", danger: "#ff6961", sheen: "#ffffff" },
+  light: { accent: "#248a3d", ink: "#1d1d1f", surface: "#ffffff", raised: "#ffffff", track: "#e5e5ea", muted: "#6e6e73", positive: "#248a3d", danger: "#d70015", sheen: "#000000" },
 } as const;
 
 export function useColors() {
@@ -25,16 +24,17 @@ export function useColors() {
 
 /* ---------- Surfaces ---------- */
 
-/** A card with a cursor-following spotlight. Use for the handful of hero surfaces per page. */
+/** A card that catches a faint neutral sheen under the cursor. */
 export function Card({ children, className, pad = 20, radius = 22, style, ...rest }: { children: ReactNode; className?: string; pad?: number; radius?: number; style?: CSSProperties } & React.HTMLAttributes<HTMLDivElement>) {
-  const theme = useTether((s) => s.theme);
+  const { theme, c } = useColors();
   return (
     <SpotlightCard
       theme={theme}
-      spotlightColor="var(--accent)"
-      intensity={0.1}
-      spotlightSize={260}
-      borderGlow={0.55}
+      spotlightColor={c.sheen}
+      intensity={theme === "dark" ? 0.05 : 0.12}
+      spotlightSize={320}
+      borderGlow={0.3}
+      flare={false}
       className={className}
       style={
         {
@@ -67,7 +67,7 @@ export function Panel({ children, className, ...rest }: { children: ReactNode; c
 type Variant = "solid" | "soft" | "outline" | "ghost" | "danger";
 
 const variants: Record<Variant, string> = {
-  solid: "bg-accent text-accent-foreground hover:brightness-110",
+  solid: "bg-foreground text-background hover:opacity-85",
   soft: "bg-muted text-foreground hover:bg-foreground/10",
   outline: "border border-border text-foreground hover:border-border-hover hover:bg-muted",
   ghost: "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -100,16 +100,12 @@ export function Button({ variant = "soft", size = "md", icon, className, childre
   );
 }
 
-/** The one hero action on a page: glass button with a travelling specular edge. */
+/** The one primary action on a page: an inverted pill. */
 export function PrimaryAction({ children, icon, onClick, disabled, type = "button" }: { children: ReactNode; icon?: (typeof icons)[keyof typeof icons]; onClick?: () => void; disabled?: boolean; type?: "button" | "submit" }) {
-  const { c } = useColors();
   return (
-    <SpecularButton size="md" tint={c.accent} tintOpacity={0.16} lineColor={c.accent} baseColor={c.accent} textColor={c.ink} onClick={onClick} disabled={disabled} type={type}>
-      <span className="inline-flex items-center gap-2">
-        {icon && <Icon icon={icon} size={16} />}
-        {children}
-      </span>
-    </SpecularButton>
+    <Button variant="solid" icon={icon} onClick={onClick} disabled={disabled} type={type}>
+      {children}
+    </Button>
   );
 }
 
@@ -137,7 +133,7 @@ export function IconButton({ icon, label, onClick, tone = "ghost", shortcut, cla
 export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   const { c } = useColors();
   return (
-    <SquishSwitch checked={checked} onChange={onChange} ariaLabel={label} disabled={disabled} width={46} height={26} radius={13} trackColor={c.track} trackOnColor={c.accent} thumbColor="#ffffff" thumbOnColor="#ffffff" />
+    <SquishSwitch checked={checked} onChange={onChange} ariaLabel={label} disabled={disabled} width={46} height={28} radius={14} trackColor={c.track} trackOnColor={c.positive} thumbColor="#ffffff" thumbOnColor="#ffffff" />
   );
 }
 
@@ -150,7 +146,7 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
       onChange={(v) => onChange(v as T)}
       size="sm"
       trackColor={c.track}
-      thumbColor={c.surface}
+      thumbColor={c.raised}
       textColor={c.muted}
       activeTextColor={c.ink}
       aria-label={label}
@@ -158,9 +154,9 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
   );
 }
 
-/** A large serif figure that springs to each new value. */
+/** A large figure that springs to each new value. */
 export function Figure({ value, decimals = 0, size = 44 }: { value: number; decimals?: number; size?: number }) {
-  return <NumberTicker value={value} decimalPlaces={decimals} className="display text-foreground tracking-tight dark:text-foreground" style={{ fontSize: size, lineHeight: 1, fontVariantNumeric: "lining-nums tabular-nums" }} />;
+  return <NumberTicker value={value} decimalPlaces={decimals} className="display text-foreground dark:text-foreground" style={{ fontSize: size, lineHeight: 1 }} />;
 }
 
 /* ---------- Small parts ---------- */
@@ -214,7 +210,7 @@ export function DeviceGlyph({ platform, size = 40, online = true }: { platform: 
 export function SectionLabel({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
     <div className="mb-3 flex items-center justify-between px-1">
-      <h2 className="text-[11px] font-medium tracking-[0.14em] text-subtle uppercase">{children}</h2>
+      <h2 className="text-[13px] font-semibold text-foreground">{children}</h2>
       {action}
     </div>
   );
@@ -223,19 +219,19 @@ export function SectionLabel({ children, action }: { children: ReactNode; action
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1.5 p-10 text-center">
-      <p className="display text-2xl text-foreground">{title}</p>
+      <p className="text-lg font-semibold tracking-tight text-foreground">{title}</p>
       {hint && <p className="max-w-xs text-[13px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }
 
-/** Editorial page header: small eyebrow, large serif title, quiet subtitle, actions on the right. */
+/** Page header: small eyebrow, bold title, quiet subtitle, actions on the right. */
 export function PageHeader({ eyebrow, title, subtitle, actions }: { eyebrow?: string; title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pb-8">
       <div className="min-w-0">
-        {eyebrow && <p className="mb-2 text-[11px] font-medium tracking-[0.16em] text-accent uppercase">{eyebrow}</p>}
-        <h1 className="display text-[clamp(2.4rem,4.2vw,3.4rem)] text-foreground">{title}</h1>
+        {eyebrow && <p className="mb-2 text-[13px] font-medium text-muted-foreground">{eyebrow}</p>}
+        <h1 className="display text-[clamp(2rem,3.2vw,2.6rem)] text-foreground">{title}</h1>
         {subtitle && <p className="mt-2.5 max-w-xl text-[15px] text-muted-foreground">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}

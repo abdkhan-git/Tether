@@ -14,16 +14,32 @@ export const devices: Device[] = [
   { id: "d-lap", name: "Old ThinkPad", platform: "windows", connection: "offline", latencyMs: null, lastSeen: m(60 * 26), isMe: false, seq: 41, fingerprint: "91ce·3b72·ad10·66e8" },
 ];
 
+/** base64url, so the sample JWT is built rather than pasted. */
+const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+const nowS = Math.floor(now / 1000);
+const sampleJwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: "device:7f3a", scope: "sync:read sync:write", iat: nowS - 3600, exp: nowS + 6 * 3600 })}.dGV0aGVyLXByZXZpZXctc2lnbmF0dXJl`;
+
+const clip = (id: string, device: string, minutesAgo: number, text: string, pinned = false): Clip => ({ id, device, ts: m(minutesAgo), text, pinned, sensitive: false });
+
+/** A spread of what people really copy, so every kind of preview has an example. */
 export const clips: Clip[] = [
-  { id: "c1", device: "d-mbp", ts: m(1), kind: "link", text: "https://github.com/aurae-rs/aurae/pull/412", pinned: false, sensitive: false },
-  { id: "c2", device: ME, ts: m(4), kind: "code", text: "fn order_key(&self) -> (Timestamp, DeviceId) {\n    (self.ts, self.device)\n}", pinned: true, sensitive: false },
-  { id: "c3", device: "d-nuc", ts: m(11), kind: "text", text: "Sync after 1 week offline (10k ops) should land under 3 s. Measure on the real laptops, not loopback.", pinned: false, sensitive: false },
-  { id: "c4", device: "d-mbp", ts: m(26), kind: "text", text: "Flight AC 837, seat 14A, confirmation K9Q2LM", pinned: true, sensitive: false },
-  { id: "c5", device: ME, ts: m(47), kind: "code", text: "cargo run --release -p tether-sim -- --seeds 10000", pinned: false, sensitive: false },
-  { id: "c6", device: ME, ts: m(62), kind: "text", text: "hunter2-correct-horse-battery", pinned: false, sensitive: true },
-  { id: "c7", device: "d-mbp", ts: m(95), kind: "link", text: "https://fly.io/blog/carving-the-scheduler-out-of-our-orchestrator/", pinned: false, sensitive: false },
-  { id: "c8", device: "d-nuc", ts: m(180), kind: "text", text: "Meeting notes: move relay work to stage 3, ship LAN clipboard first.", pinned: false, sensitive: false },
-  { id: "c9", device: ME, ts: m(60 * 29), kind: "code", text: "SELECT device, MAX(seq) FROM ops GROUP BY device;", pinned: false, sensitive: false },
+  clip("c1", "d-mbp", 1, "https://github.com/tokio-rs/tokio/pull/6812?utm_source=newsletter&utm_medium=email&utm_campaign=rust-weekly"),
+  clip("c2", ME, 3, `{"device":{"id":"7f3a-c91e","name":"Windows PC","platform":"windows"},"sync":{"clipboard":true,"files":true,"maxHistory":1000,"neverSync":["password","token"]},"peers":[{"id":"b40d","transport":"quic","lan":true},{"id":"2c88","transport":"quic","lan":false}],"version":3}`),
+  clip("c3", ME, 4, "fn order_key(&self) -> (Timestamp, DeviceId) {\n        (self.ts, self.device)\n    }", true),
+  clip("c4", "d-nuc", 9, "select device, max(seq) as head, count(*) as ops from oplog where ts > now() - interval '1 day' group by device order by head desc;"),
+  clip("c5", "d-mbp", 14, "#30D158"),
+  clip("c6", ME, 20, "1767225600"),
+  clip("c7", "d-mbp", 26, "Flight AC 837, seat 14A, confirmation K9Q2LM", true),
+  clip("c8", ME, 33, "def backoff(attempt: int, base: float = 0.25) -> float:\n\t\tdelay = base * (2 ** attempt)\n\t\treturn min(delay, 30.0) * random.uniform(0.5, 1.5)"),
+  clip("c9", "d-nuc", 47, "task,stage,status\nLAN clipboard,1,Done\nPairing handshake,1,In progress\nReplicated log,2,Done\nResumable transfers,3,Planned"),
+  clip("c10", ME, 62, "AKIAIOSFODNN7EXAMPLE"),
+  clip("c11", "d-mbp", 80, "Tether keeps an append-only log on every device and\nreplicates it to each paired peer, so that copies made\nwhile offline still converge once the devices\nreconnect, without a server holding the data."),
+  clip("c12", ME, 95, "C:\\Users\\you\\Documents\\Tether\\design-review.pdf"),
+  clip("c13", "d-nuc", 120, "(1920 * 1080 * 4) / 1024 / 1024"),
+  clip("c14", "d-mbp", 150, sampleJwt),
+  clip("c15", ME, 180, "export const backoff=(attempt:number,base=250)=>Math.min(base*2**attempt,30_000)"),
+  clip("c16", "d-nuc", 240, "relay-ops@example.com"),
+  clip("c17", ME, 60 * 29, "Xk9#mQ2$vL7pR4"),
 ];
 
 export const transfers: Transfer[] = [
@@ -89,9 +105,10 @@ export const ops: OpRow[] = Array.from({ length: 14 }, (_, i) => {
   };
 });
 
-export const remoteCopies: { device: string; kind: Clip["kind"]; text: string }[] = [
-  { device: "d-mbp", kind: "text", text: "Remember: mark password-manager clips as sensitive so they never sync." },
-  { device: "d-nuc", kind: "link", text: "https://docs.rs/quinn/latest/quinn/struct.Endpoint.html" },
-  { device: "d-mbp", kind: "code", text: "git log --oneline --graph --all -20" },
-  { device: "d-nuc", kind: "text", text: "Measure p99 clipboard latency on two real machines, not loopback." },
+export const remoteCopies: { device: string; text: string }[] = [
+  { device: "d-mbp", text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s&si=Ab3dEfGhIjKlMn" },
+  { device: "d-nuc", text: "Get-ChildItem -Path C:\\Projects -Recurse -Filter *.log | Remove-Item -WhatIf" },
+  { device: "d-mbp", text: `[{"seq":215,"device":"b40d","kind":"clipboard.text"},{"seq":216,"device":"b40d","kind":"pin"}]` },
+  { device: "d-nuc", text: "git log --oneline --graph --all -20" },
+  { device: "d-mbp", text: "hsl(212, 92%, 58%)" },
 ];

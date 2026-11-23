@@ -51,8 +51,8 @@ export function TopBar() {
   return (
     <header className="relative z-30 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-6 pt-5 pb-2 2xl:grid-cols-[1fr_auto_1fr]" data-tauri-drag-region>
       <button onClick={() => setActiveModule("overview")} className="flex items-center gap-2.5 justify-self-start rounded-full py-1 pr-3 text-foreground transition-opacity hover:opacity-80" aria-label="Tether overview">
-        <Mark className="size-7 text-accent" />
-        <span className="display hidden text-[26px] leading-none 2xl:inline">Tether</span>
+        <Mark className="size-6 text-foreground" />
+        <span className="hidden text-[17px] font-semibold tracking-tight 2xl:inline">Tether</span>
       </button>
 
       <div className="flex min-w-0 justify-center justify-self-center">
@@ -65,8 +65,8 @@ export function TopBar() {
           itemStyle="plain"
           hoverEffect="glide"
           indicator="pill"
-          highlightColor={c.accent}
-          highlightTextColor={c.accentInk}
+          highlightColor={c.raised}
+          highlightTextColor={c.ink}
           items={items}
           activeHref={`#${activeModule}`}
           onItemClick={(item, _i, e) => {

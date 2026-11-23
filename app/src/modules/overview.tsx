@@ -3,9 +3,9 @@ import { motion } from "motion/react";
 import { useTether } from "@/data/store";
 import type { Device } from "@/data/types";
 import { bytes, median, rate, timeAgo } from "@/lib/format";
+import { contentOf } from "@/lib/content/detect";
 import { cn } from "@/lib/cn";
 import { AnimatedBeam } from "@/components/magic/animated-beam";
-import BlurText from "@/components/rb/BlurText";
 import { icons } from "@/components/Icon";
 import { Card, DeviceGlyph, Figure, IconButton, Panel, PrimaryAction, SectionLabel, StatusDot, useColors } from "@/components/ui";
 import type { TetherModule } from "./types";
@@ -23,8 +23,8 @@ function Node({ device, innerRef, hub }: { device: Device; innerRef: RefObject<H
   return (
     <div className="flex flex-col items-center gap-2.5">
       <div ref={innerRef} className="relative">
-        {hub && <span className="absolute -inset-3 animate-ping rounded-full border border-accent/30" style={{ animationDuration: "3.2s" }} />}
-        <div className={cn("rounded-full p-1", hub ? "bg-accent-soft ring-1 ring-accent/40" : "")}>
+        {hub && <span className="absolute -inset-3 animate-ping rounded-full border border-foreground/10" style={{ animationDuration: "3.2s" }} />}
+        <div className={cn("rounded-full p-1", hub ? "bg-muted ring-1 ring-border-hover" : "")}>
           <DeviceGlyph platform={device.platform} size={hub ? 72 : 56} online={!offline} />
         </div>
         {!offline && !hub && <StatusDot connection={device.connection} className="absolute top-1 right-1" />}
@@ -85,7 +85,7 @@ function Constellation() {
               pathColor={c.muted}
               pathOpacity={0.22}
               pathWidth={1.5}
-              gradientStartColor={c.accent}
+              gradientStartColor={c.ink}
               gradientStopColor={c.positive}
               duration={3.6 + i * 0.7}
               delay={i * 0.5}
@@ -130,8 +130,10 @@ function OverviewView() {
     <div className="flex flex-col gap-10">
       <header className="flex flex-wrap items-end justify-between gap-6 pt-2">
         <div>
-          <p className="mb-3 text-[11px] font-medium tracking-[0.16em] text-accent uppercase">Overview</p>
-          <BlurText text="Your devices, as one." animateBy="words" delay={90} direction="bottom" trigger="load" className="display text-[clamp(2.8rem,6vw,4.6rem)] text-foreground" />
+          <p className="mb-2 text-[13px] font-medium text-muted-foreground">Overview</p>
+          <motion.h1 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", duration: 0.7, bounce: 0.1 }} className="display text-[clamp(2.4rem,4.6vw,3.4rem)] text-foreground">
+            Your devices, as one.
+          </motion.h1>
           <p className="mt-4 max-w-lg text-base text-muted-foreground">
             {online.length} of {peers.length} paired devices are online. Whatever you copy on one is already waiting on the rest.
           </p>
@@ -160,7 +162,7 @@ function OverviewView() {
                 <motion.div key={c.id} layout="position" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", duration: 0.5, bounce: 0.15, delay: i * 0.04 }} className="group flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-muted/60">
                   {dev && <DeviceGlyph platform={dev.platform} size={34} online={dev.connection !== "offline"} />}
                   <div className="min-w-0 flex-1">
-                    <p className={cn("truncate text-[13.5px]", c.kind === "code" && "font-mono text-xs")}>{c.text.split("\n")[0]}</p>
+                    <p className={cn("truncate text-[13.5px]", ["code", "json"].includes(contentOf(c.text).kind) && "font-mono text-xs")}>{c.text.split("\n")[0]}</p>
                     <p className="mt-0.5 text-xs text-subtle">
                       {c.device === me ? "This device" : names.get(c.device)} · {timeAgo(c.ts)}
                     </p>

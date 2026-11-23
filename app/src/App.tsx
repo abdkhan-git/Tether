@@ -18,6 +18,16 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
+  // Follow the URL hash, so deep links and back/forward work.
+  useEffect(() => {
+    const onHash = () => {
+      const id = location.hash.slice(1);
+      if (id && id !== useTether.getState().activeModule) setActive(id);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [setActive]);
+
   // If the open module gets switched off, fall back to the overview.
   const active = [...liveModules, modulesPageModule].find((m) => m.id === activeId);
   const usable = !!active && (active.id === "modules" || !disabled.includes(active.id));
