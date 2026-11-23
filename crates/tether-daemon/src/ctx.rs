@@ -1,6 +1,6 @@
 //! Shared daemon state. The lock is a plain `std::sync::Mutex` and is never
 //! held across an `.await`: every critical section is a few map operations
-//! plus, until the SQLite move, one small fsync'd append.
+//! plus at most one small database transaction.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -217,8 +217,10 @@ impl Ctx {
                         s.log.ops_from(author)[had.min(held as usize)..].to_vec()
                     })
                     .collect();
-                for op in &fresh {
-                    Self::persist(&mut s, op);
+                if let Some(store) = s.store.as_mut() {
+                    if let Err(e) = store.append_all(&fresh) {
+                        error!(error = %e, "could not persist operations; they will be re-fetched from peers");
+                    }
                 }
             }
             for device in &out.equivocators {

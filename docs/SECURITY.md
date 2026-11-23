@@ -23,7 +23,8 @@ Known limits of the current design, stated plainly:
 | Risk | Why it remains | Plan |
 | --- | --- | --- |
 | A compromised member is fully trusted until revoked, and could race to revoke others. | All devices are equal; there is no higher authority to appeal to. | A recovery key or a quorum for revocations (later stage). |
-| Clipboard history on disk is plain text, protected by the user's account permissions. | The interim store is a simple append-only file. | SQLite with encryption at rest, key in the credential store (P1). |
+| The encrypted database still shows how many items there are, roughly how long each is, and when it changed. | Rows are sealed one by one; padding every row would cost space for little gain. | Pad clipboard rows to size buckets if this ever matters. |
+| An attacker who can write the database file can delete or roll back history (but not read, forge or reorder it). | Encryption gives confidentiality and per-row integrity, not freshness. | Peers re-send lost operations; a revoked device's operations are re-checked on load either way. |
 | mDNS advertises that a machine runs Tether and its public device key. | Needed for zero-configuration discovery. | Option to turn discovery off (`--no-mdns` exists); rotating advertisement ids later. |
 | The content policy is pattern-based and can miss a cleverly disguised command. | No heuristic catches everything. | It is defence in depth: only paired devices can send content at all. |
 | Malware running as the same user can read the clipboard and the credential store. | Outside what an application can prevent. | Out of scope (see the adversary table). |
@@ -82,8 +83,42 @@ A device can do only what its peers have granted it. Grants are operations in th
 - **CI gates (required to merge):** fmt, clippy `-D warnings`, tests, the simulator, `cargo deny` (advisories, licences, duplicate and banned crates), `cargo audit`, `npm audit --omit=dev`, frontend typecheck, tests and build.
 - **Dependencies:** each new dependency is justified in its PR. Lockfiles are committed. Third-party UI code is vendored and scanned before use (see `app/src/components/VENDORED.md`).
 - **Releases:** signed binaries, published checksums, an SBOM, and reproducible builds where the toolchain allows.
-- **Cryptography:** only reviewed libraries (rustls, `snow` for Noise, `ed25519-dalek`, `blake3`); no custom primitives.
+- **Cryptography:** only reviewed libraries (rustls, `snow` for Noise, `ed25519-dalek`, `blake3`, RustCrypto's `chacha20poly1305`); no custom primitives.
 - **Disclosure:** report vulnerabilities privately through GitHub security advisories on the repository. Fixes ship before details are published.
+
+## Feature threat models
+
+### Encrypted storage (P1.1)
+
+```
+Feature: the operation log and group root, saved in SQLite (crates/tether-daemon/src/store.rs).
+Capability it needs: none (local only).
+What an attacker gains if it is abused: the device's clipboard history, or a way to slip
+  operations into the log without a peer's signature.
+Who could abuse it: someone holding the disk or a backup of it; another program that can
+  write files in the data folder; a crash at a bad moment.
+Mitigations:
+  - Each value is sealed with XChaCha20-Poly1305 (random 192-bit nonce) under a 256-bit key
+    kept in the OS credential store next to the device key, never in a file or a log.
+  - The associated data is the value's slot (table and row id, or meta name), so a sealed
+    value moved to another row or table fails to open.
+  - A sealed key-check value: a database sealed with another key is moved aside, not
+    half-read, and the daemon starts empty.
+  - Every operation is re-verified on load (limits, signature, membership), as if a peer sent it.
+  - WAL with synchronous=FULL: each append and rewrite is one atomic, durable transaction.
+  - Exclusive locking: a second daemon on the same profile is refused.
+  - The P0 plain-text file is imported once, then overwritten with zeros and deleted.
+Limits: a stored operation larger than the wire frame limit is dropped without being opened.
+Test or invariant proving the main property: store::tests (nothing_readable_reaches_the_disk,
+  a_tampered_row_is_dropped_and_the_rest_load, a_sealed_value_cannot_be_moved_to_another_slot,
+  a_database_sealed_with_another_key_is_set_aside, a_crash_mid_write_loses_nothing_committed,
+  a_second_daemon_on_the_same_profile_is_refused, the_old_plain_text_store_is_imported_then_removed,
+  the_key_is_never_printed).
+Residual risk the user should know about: row count, sizes and timing are visible; history
+  can be deleted or rolled back by whoever can write the file; malware running as the user
+  can read the key from the credential store; zeroing the old plain-text file is best effort
+  on SSDs and copy-on-write file systems.
+```
 
 ## Threat model template (one per feature)
 

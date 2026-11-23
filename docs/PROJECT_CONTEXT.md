@@ -64,7 +64,8 @@ The cross-device workspace was the owner's own idea. It wins when combined with 
 Done and verified on Windows:
 
 - Phase P0 complete: Ed25519 device keys in the OS credential store; SPAKE2 pairing bound to the TLS channel; mutual TLS with pinned keys; signed operations; membership and revocation in the log; protocol limits and rate limits; content policy (secrets stay local, pastejacking held); durable log re-verified on load; reconnect loop.
-- 45 Rust tests pass (core, daemon, simulator), including 4 end-to-end tests that run real daemons over loopback QUIC (stranger refused, pastejacking held, secrets kept local, brute force stopped, revocation enforced). Clippy (`-D warnings`) and rustfmt clean.
+- P1 step 1, encrypted storage: the log and group root live in SQLite (WAL, synchronous=FULL, exclusive lock), each value sealed with XChaCha20-Poly1305 under a key in the OS credential store and bound to its row. Checked on Windows with the real Credential Manager: the keys persist, the database survives a hard kill, and no plain text reaches disk.
+- 52 Rust tests pass (core, daemon, simulator), including 4 end-to-end tests that run real daemons over loopback QUIC (stranger refused, pastejacking held, secrets kept local, brute force stopped, revocation enforced). Clippy (`-D warnings`) and rustfmt clean.
 - Simulator: 10,000 seeds × 4 devices, 0 failures: 2.0M ops, 201k network faults, 149k forged or injected operations (none accepted), 3,923 compromised-and-revoked devices (206 s on 12 threads; seeds run in parallel because every op is now signed and verified, about 27 µs to sign and 84 µs to verify).
 - Live sync between two paired daemons on loopback: about 0.8 ms round trip including signing and verification.
 - Frontend: 36 unit tests for content detection; typecheck and build clean; `npm audit` clean.

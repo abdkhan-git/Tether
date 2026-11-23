@@ -89,13 +89,24 @@ async fn main() -> Result<()> {
         (keystore::generate()?, None)
     } else {
         let key = keystore::load_or_create(&args.profile)?;
-        let loaded = store::Store::open(&data_dir(&args.profile)?)?;
+        let db_key = keystore::load_or_create_db_key(&args.profile)?;
+        let loaded = store::Store::open(&data_dir(&args.profile)?, &db_key)?;
         (key, Some(loaded))
     };
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let mut log = OpLog::new(key.clone());
     let store = match loaded {
         Some(l) => {
+            if let Some(aside) = &l.set_aside {
+                warn!(
+                    path = %aside.display(),
+                    "the database was encrypted with a different key (was the credential store reset?); \
+                     it was moved aside and this device starts empty. Pair it again to rejoin your devices."
+                );
+            }
+            if l.imported > 0 {
+                info!(ops = l.imported, "moved history from the old plain-text file into the encrypted database");
+            }
             if let Some(root) = l.root {
                 log.set_root(root);
             }
