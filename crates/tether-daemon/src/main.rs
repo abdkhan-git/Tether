@@ -4,10 +4,12 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 mod control;
 mod ctx;
 mod discovery;
 mod input;
+mod ipc;
 mod keystore;
 mod net;
 mod pair;
@@ -134,6 +136,28 @@ async fn main() -> Result<()> {
 
     let endpoint = net::make_endpoint(&ctx, args.port)?;
     let port = endpoint.local_addr()?.port();
+
+    // The local control channel for the desktop app and the CLI. Bind first,
+    // then publish a fresh token: if another daemon holds this profile's
+    // endpoint we stop here, before touching its token.
+    let control_token = if args.ephemeral {
+        // Ephemeral daemons never touch the credential store; tests hand them a token.
+        tether_ipc::token::from_env().transpose()?
+    } else {
+        None
+    };
+    let control = if args.ephemeral && control_token.is_none() {
+        None
+    } else {
+        let local = tether_ipc::Endpoint::for_profile(&args.profile)?;
+        let listener = ipc::bind(&local)?;
+        let token = match control_token {
+            Some(token) => token,
+            None => tether_ipc::token::publish(&args.profile)?,
+        };
+        info!(endpoint = %local, "control channel listening");
+        Some((listener, token))
+    };
     info!(device = %ctx.me().to_hex(), name = %ctx.name(), port, members = ctx.lock().log.trust().members.len(), "tetherd started (type /help for commands)");
 
     let (local_tx, mut local_rx) = mpsc::unbounded_channel::<String>();
@@ -145,6 +169,9 @@ async fn main() -> Result<()> {
     }
     input::spawn_stdin(line_tx, args.stdin);
 
+    if let Some((listener, token)) = control {
+        tokio::spawn(ipc::serve(listener, token, ctx.clone(), endpoint.clone()));
+    }
     tokio::spawn(net::accept_loop(ctx.clone(), endpoint.clone()));
     tokio::spawn(net::reconnect_loop(ctx.clone(), endpoint.clone(), args.peer.clone()));
     let _mdns = if args.no_mdns { None } else { Some(discovery::start(ctx.clone(), port)?) };
@@ -161,6 +188,10 @@ async fn main() -> Result<()> {
     }
 
     info!("shutting down");
+    if !args.ephemeral {
+        // The token is useless once we stop; don't leave it behind.
+        let _ = tether_ipc::token::withdraw(&args.profile);
+    }
     endpoint.close(0u32.into(), b"shutdown");
     endpoint.wait_idle().await;
     Ok(())

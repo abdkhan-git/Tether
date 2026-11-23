@@ -95,6 +95,7 @@ async fn run_session(ctx: Ctx, _endpoint: Endpoint, conn: Connection, peer: teth
     if let Some(old) = ctx.lock().peers.insert(peer, conn.clone()) {
         old.close(0u32.into(), b"replaced");
     }
+    ctx.emit(tether_ipc::Event::DevicesChanged);
 
     // Catch up on anything missed while apart.
     {
@@ -134,9 +135,12 @@ async fn run_session(ctx: Ctx, _endpoint: Endpoint, conn: Connection, peer: teth
     }
 
     let id = conn.stable_id();
-    let mut s = ctx.lock();
-    if s.peers.get(&peer).is_some_and(|c| c.stable_id() == id) {
-        s.peers.remove(&peer);
+    let removed = {
+        let mut s = ctx.lock();
+        s.peers.get(&peer).is_some_and(|c| c.stable_id() == id) && s.peers.remove(&peer).is_some()
+    };
+    if removed {
+        ctx.emit(tether_ipc::Event::DevicesChanged);
     }
 }
 

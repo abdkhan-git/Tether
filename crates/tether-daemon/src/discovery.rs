@@ -35,7 +35,9 @@ pub fn start(ctx: Ctx, port: u16) -> Result<ServiceDaemon> {
             let Some(ip) = info.get_addresses().iter().find(|ip| ip.is_ipv4()).copied() else { continue };
             let addr = std::net::SocketAddr::new(ip, info.get_port());
             debug!(%peer, %addr, "seen on the network");
-            ctx.lock().nearby.insert(peer, addr);
+            if ctx.lock().nearby.insert(peer, addr) != Some(addr) {
+                ctx.emit(tether_ipc::Event::DevicesChanged);
+            }
         }
     })?;
     Ok(mdns)

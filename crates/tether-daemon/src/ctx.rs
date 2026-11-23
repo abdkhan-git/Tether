@@ -14,10 +14,18 @@ use tether_core::content::{self, Delivery, HoldReason};
 use tether_core::limits::MAX_NAME_BYTES;
 use tether_core::pairing::{MAX_ATTEMPTS, WINDOW_SECS};
 use tether_core::{Clock, DeviceId, LocalError, Message, Op, OpKind, OpLog, VersionVector};
+use tether_ipc::Event;
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+use crate::api;
 use crate::store::Store;
 use crate::tls::{SharedGate, TlsIdentity};
+
+/// Events queued per control-channel subscriber before it is told it lagged.
+const EVENT_QUEUE: usize = 256;
+/// More new history items than this in one batch become one `HistoryChanged`.
+const MAX_ITEM_EVENTS: usize = 16;
 
 /// What the daemon hands to the clipboard (or console) thread.
 #[derive(Debug, Clone)]
@@ -74,6 +82,8 @@ pub struct Ctx {
     pub tls: Arc<TlsIdentity>,
     pub clock: Arc<dyn Clock>,
     deliver: Sender<Delivered>,
+    /// Fans state changes out to control-channel subscribers.
+    pub events: broadcast::Sender<Event>,
 }
 
 /// Strip control and direction-changing characters from a name a peer chose,
@@ -116,9 +126,15 @@ impl Ctx {
             pinned: HashSet::new(),
             store,
         };
-        let ctx = Self { state: Arc::new(Mutex::new(state)), gate, tls: Arc::new(tls), clock, deliver };
+        let (events, _) = broadcast::channel(EVENT_QUEUE);
+        let ctx = Self { state: Arc::new(Mutex::new(state)), gate, tls: Arc::new(tls), clock, deliver, events };
         ctx.refresh_gate();
         ctx
+    }
+
+    /// Tell control-channel subscribers (if any) that something changed.
+    pub fn emit(&self, event: Event) {
+        let _ = self.events.send(event);
     }
 
     /// The lock, recovering from poisoning: a panic elsewhere must not take
@@ -169,6 +185,7 @@ impl Ctx {
     pub fn local_copy(&self, text: String) -> Option<Op> {
         if let Some(kind) = content::secret_kind(&text) {
             let _ = self.deliver.send(Delivered::KeptLocal(kind));
+            self.emit(Event::KeptLocal { kind: kind.to_string() });
             return None;
         }
         let now = self.clock.now_ms();
@@ -179,6 +196,11 @@ impl Ctx {
         match s.log.append_local(OpKind::ClipboardText(text), now) {
             Ok(op) => {
                 Self::persist(&mut s, &op);
+                let me = s.log.me();
+                drop(s);
+                if let Some(item) = api::item(&op, me) {
+                    self.emit(Event::Clipboard(item));
+                }
                 Some(op)
             }
             Err(LocalError::TooLarge) => {
@@ -196,10 +218,22 @@ impl Ctx {
     /// clipboard item according to the delivery policy.
     pub fn apply(&self, ops: Vec<Op>) -> ApplyOutcome {
         let now = self.clock.now_ms();
-        let (out, delivery, changed) = {
+        let (out, delivery, changed, new_items) = {
             let mut s = self.lock();
             let before = s.log.version_vector();
             let out = s.log.apply_batch(ops, now);
+            let fresh: Vec<Op> = if out.applied == 0 {
+                Vec::new()
+            } else {
+                s.log
+                    .version_vector()
+                    .into_iter()
+                    .flat_map(|(author, held)| {
+                        let had = before.get(&author).copied().unwrap_or(0) as usize;
+                        s.log.ops_from(author)[had.min(held as usize)..].to_vec()
+                    })
+                    .collect()
+            };
             if out.membership_changed {
                 let ops: Vec<Op> = s.log.all_ops().cloned().collect();
                 if let Some(store) = s.store.as_mut() {
@@ -207,22 +241,22 @@ impl Ctx {
                         error!(error = %e, "could not rewrite the operation log");
                     }
                 }
-            } else if out.applied > 0 {
-                let fresh: Vec<Op> = s
-                    .log
-                    .version_vector()
-                    .into_iter()
-                    .flat_map(|(author, held)| {
-                        let had = before.get(&author).copied().unwrap_or(0) as usize;
-                        s.log.ops_from(author)[had.min(held as usize)..].to_vec()
-                    })
-                    .collect();
+            } else if !fresh.is_empty() {
                 if let Some(store) = s.store.as_mut() {
                     if let Err(e) = store.append_all(&fresh) {
                         error!(error = %e, "could not persist operations; they will be re-fetched from peers");
                     }
                 }
             }
+            let me = s.log.me();
+            let trust = s.log.trust();
+            let mut new_items: Vec<_> = fresh
+                .iter()
+                // The same rule as `OpLog::clipboard_history`.
+                .filter(|op| op.device == me || trust.accepts(op.device, op.seq))
+                .filter_map(|op| api::item(op, me))
+                .collect();
+            new_items.sort_by_key(|item| (item.at, item.author));
             for device in &out.equivocators {
                 error!(%device, "device signed two different operations with the same sequence number; its key may be compromised");
             }
@@ -239,10 +273,17 @@ impl Ctx {
                 }
             });
             let changed = out.membership_changed;
-            (out, delivery, changed)
+            (out, delivery, changed, new_items)
         };
         if let Some(d) = delivery {
             let _ = self.deliver.send(d);
+        }
+        if new_items.len() > MAX_ITEM_EVENTS {
+            self.emit(Event::HistoryChanged);
+        } else {
+            for item in new_items {
+                self.emit(Event::Clipboard(item));
+            }
         }
         if changed {
             self.refresh_gate();
@@ -283,6 +324,7 @@ impl Ctx {
             info!(%device, "closing connection: device is no longer trusted");
             conn.close(1u32.into(), b"not trusted");
         }
+        self.emit(Event::DevicesChanged);
     }
 
     /// Open a pairing window with this code.

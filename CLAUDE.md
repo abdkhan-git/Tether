@@ -20,6 +20,8 @@ Before planning or changing anything, read:
 - `crates/tether-core`: no-I/O core (DeviceId, HLC, Op, OpLog, wire Message). Keep it free of I/O so the simulator can run it.
 - `crates/tether-daemon`: `tetherd` binary (mDNS, QUIC via quinn, clipboard).
 - `crates/tether-sim`: deterministic simulator and convergence invariants.
+- `crates/tether-os`: OS integration, the only crate allowed `unsafe` (every block has a `// SAFETY:` comment, enforced by clippy). Holds the owner-only local channel (named pipe / Unix socket).
+- `crates/tether-ipc`: the local control protocol (frames, mutual token handshake, requests/replies/events, client) used by the daemon, the CLI and the desktop app.
 - `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion, Tauri shell not yet added). Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
 
 ## Commands

@@ -120,6 +120,58 @@ Residual risk the user should know about: row count, sizes and timing are visibl
   on SSDs and copy-on-write file systems.
 ```
 
+### Local control channel (P1.2)
+
+```
+Feature: the channel the desktop app and the `tether` CLI use to drive the daemon
+  (crates/tether-os/src/local.rs for the transport, crates/tether-ipc for the protocol,
+  crates/tether-daemon/src/ipc.rs for the server).
+Capability it needs: none; it is the user's own console. It can do anything the user can:
+  read history, show a pairing code, join a group, revoke a device.
+What an attacker gains if it is abused: everything. Opening a pairing window or joining a
+  group the attacker controls hands over the clipboard of every device.
+Who could abuse it:
+  - another user account on the same machine;
+  - a web page (the reason this is not a localhost TCP port: no DNS rebinding or
+    cross-site requests can reach a named pipe or a Unix socket);
+  - a sandboxed process running as the user (browser renderer, AppContainer app);
+  - a program that grabs the pipe or socket name first and pretends to be the daemon,
+    to steal the client's credentials or feed it false data;
+  - a buggy or hostile client sending oversized or malformed frames.
+Mitigations:
+  - Windows: a named pipe whose name includes the user's SID, created with a protected
+    DACL that grants access to the current user's SID only (no inherited entries), with
+    FILE_FLAG_FIRST_PIPE_INSTANCE (if the name already exists, the daemon refuses to start
+    rather than share it) and PIPE_REJECT_REMOTE_CLIENTS. Low-integrity and AppContainer
+    processes are refused by the default mandatory label and by the DACL.
+    Clients open the pipe with SECURITY_IDENTIFICATION, so a fake server cannot act as them.
+  - Unix: a socket in a 0700 directory the user owns (checked, not assumed), mode 0600,
+    and every connection's peer credentials must match the daemon's own user id.
+  - Mutual authentication with a 256-bit token that the daemon makes fresh at every start
+    and keeps in the OS credential store. Each side proves it knows the token with a keyed
+    BLAKE3 MAC over both sides' random nonces; the token itself never crosses the channel.
+    A client that cannot prove it is closed without a reply; a server that cannot prove it
+    is dropped by the client before it sends any request.
+  - Before authentication the server sends only a protocol version and a random nonce.
+  - Length-prefixed postcard frames with hard limits, strict decoding, and fail-closed
+    handling: any bad frame closes the connection.
+Limits: 8 clients at once; 5 s to authenticate; requests up to 16 KiB; replies up to 4 MiB;
+  history pages of at most 100 items and about 2 MiB; 10 s to write a reply; 256 queued
+  events per subscriber, after which the subscriber is told it lagged.
+Test or invariant proving the main property:
+  tether-os local::tests (the pipe's DACL holds one entry, for this user; a second server
+  cannot take the name; on Unix the socket is 0600 in a 0700 directory);
+  tether-ipc tests (a wrong or missing token gets nothing; a client refuses a server that
+  does not know the token; oversized frames are refused);
+  tether-daemon tests/control_e2e.rs (real daemons: wrong token gets nothing, too many
+  clients are refused, and two daemons pair, join and sync driven only through the channel).
+Residual risk the user should know about: any program running as the same user can read
+  the token from the credential store and use the channel, just as it could read the
+  clipboard directly; this is outside what an application can prevent. No test yet runs as
+  a second OS user: the "other users are refused" property rests on the DACL and file
+  modes, which the tests read back.
+```
+
 ## Threat model template (one per feature)
 
 ```

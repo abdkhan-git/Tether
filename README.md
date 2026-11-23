@@ -69,7 +69,8 @@ Clipboard history is ordered by hybrid logical clock time with the device id as 
 - [x] Limits, timeouts and rate limits; content policy (secrets, pastejacking)
 - [x] Durable log on disk, re-verified on load; reconnect loop
 - [x] SQLite storage, each row encrypted (XChaCha20-Poly1305, key in the OS credential store)
-- [ ] Desktop app wired to the daemon over an authenticated local channel (P1)
+- [x] Authenticated local control channel: owner-only named pipe / Unix socket, mutual token handshake
+- [ ] Desktop app and `tether` CLI wired to the daemon over that channel (P1)
 - [ ] Clipboard change notifications instead of polling (removes up to 100 ms)
 - [ ] Benchmarks: copy-to-paste latency p50/p99 between two real machines
 

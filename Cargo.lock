@@ -2664,12 +2664,41 @@ dependencies = [
  "rcgen",
  "rusqlite",
  "rustls",
+ "serde",
  "tether-core",
+ "tether-ipc",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "tether-ipc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.3",
+ "hex",
+ "keyring",
+ "postcard",
+ "serde",
+ "tether-core",
+ "tether-os",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "tether-os"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "libc",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tether-core", "crates/tether-daemon", "crates/tether-sim"]
+members = ["crates/tether-core", "crates/tether-daemon", "crates/tether-ipc", "crates/tether-os", "crates/tether-sim"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,8 @@ opt-level = 3
 
 [workspace.dependencies]
 tether-core = { path = "crates/tether-core", version = "0.1.0" }
+tether-ipc = { path = "crates/tether-ipc", version = "0.1.0" }
+tether-os = { path = "crates/tether-os", version = "0.1.0" }
 anyhow = "1"
 arboard = "3"
 clap = { version = "4", features = ["derive"] }

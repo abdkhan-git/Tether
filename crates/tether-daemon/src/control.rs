@@ -1,15 +1,16 @@
-//! Console commands. Stage P1 moves these behind the desktop app's
-//! authenticated local channel; the console stays for scripting and tests.
+//! Console commands on stdin, for scripting, demos and tests. They call the
+//! same functions (`api`) as the local control channel, and only format the
+//! results as text.
 
 use std::net::SocketAddr;
 
 use anyhow::{anyhow, Result};
 use quinn::Endpoint;
-use tether_core::pairing::{code_from_random, MAX_ATTEMPTS, WINDOW_SECS};
 use tether_core::DeviceId;
+use tether_ipc::DeviceState;
 
+use crate::api;
 use crate::ctx::Ctx;
-use crate::{net, pair};
 
 const HELP: &str = "\
 commands:
@@ -19,16 +20,6 @@ commands:
   /revoke ID             remove a device (first characters of its id are enough)
   /whoami                show this device's id and group
   /help                  this list";
-
-/// A uniformly random six-digit code (rejection sampling avoids modulo bias).
-fn random_code() -> Result<String> {
-    loop {
-        let n = getrandom::u32().map_err(|e| anyhow!("no secure randomness available: {e}"))?;
-        if n < 4_294_000_000 {
-            return Ok(code_from_random(n));
-        }
-    }
-}
 
 fn find_member(ctx: &Ctx, prefix: &str) -> Result<DeviceId> {
     let prefix = prefix.to_ascii_lowercase();
@@ -45,61 +36,51 @@ fn find_member(ctx: &Ctx, prefix: &str) -> Result<DeviceId> {
     }
 }
 
+fn state_name(state: DeviceState) -> &'static str {
+    match state {
+        DeviceState::ThisDevice => "this device",
+        DeviceState::Connected => "connected",
+        DeviceState::Offline => "offline",
+        DeviceState::Revoked => "revoked",
+        DeviceState::Nearby => "nearby, not paired",
+    }
+}
+
 pub async fn handle(ctx: &Ctx, endpoint: &Endpoint, line: &str) {
     let mut words = line.split_whitespace();
     let result: Result<String> = match words.next().unwrap_or("") {
         "/help" => Ok(HELP.to_string()),
-        "/whoami" => {
-            let s = ctx.lock();
-            Ok(format!("this device: {} ({})\ngroup root: {}\nmembers: {}", s.log.me().to_hex(), s.name, s.log.root(), s.log.trust().members.len()))
-        }
-        "/pair" => random_code().map(|code| {
-            ctx.open_pairing(code.clone());
-            format!("pairing code: {code}\nenter it on the other device with /join {code}\nvalid for {} minutes or {MAX_ATTEMPTS} attempts", WINDOW_SECS / 60)
+        "/whoami" => endpoint.local_addr().map_err(Into::into).map(|addr| {
+            let s = api::status(ctx, addr.port());
+            format!("this device: {} ({})\ngroup root: {}\nmembers: {}", s.device.to_hex(), s.name, s.root, s.members)
         }),
-        "/join" => match words.next() {
-            None => Err(anyhow!("usage: /join CODE [ADDR]")),
-            Some(code) => {
-                let candidates: Vec<SocketAddr> = match words.next() {
-                    Some(addr) => addr.parse().map(|a| vec![a]).map_err(|_| anyhow!("ADDR looks like 192.168.1.20:5000")),
-                    None => {
-                        let s = ctx.lock();
-                        let trusted = ctx.gate.read().map(|g| g.trusted.clone()).unwrap_or_default();
-                        Ok(s.nearby.iter().filter(|(d, _)| !trusted.contains(d)).map(|(_, a)| *a).collect())
-                    }
+        "/pair" => api::pair(ctx).map(|p| {
+            format!(
+                "pairing code: {}\nenter it on the other device with /join {}\nvalid for {} minutes or {} attempts",
+                p.code,
+                p.code,
+                p.valid_secs / 60,
+                p.attempts
+            )
+        }),
+        "/join" => match (words.next(), words.next()) {
+            (None, _) => Err(anyhow!("usage: /join CODE [ADDR]")),
+            (Some(code), addr) => match addr.map(str::parse::<SocketAddr>).transpose() {
+                Err(_) => Err(anyhow!("ADDR looks like 192.168.1.20:5000")),
+                Ok(addr) => {
+                    api::join(ctx, endpoint, code.to_string(), addr).await.map(|d| format!("paired with {d}; syncing"))
                 }
-                .unwrap_or_default();
-                pair::join(ctx.clone(), endpoint.clone(), code.to_string(), candidates).await.map(|d| format!("paired with {d}; syncing"))
-            }
+            },
         },
-        "/peers" => {
-            let s = ctx.lock();
-            let me = s.log.me();
-            let trust = s.log.trust();
-            let lines: Vec<String> = trust
-                .members
-                .iter()
-                .map(|(d, added_as)| {
-                    let name = s.names.get(d).cloned().unwrap_or_else(|| added_as.clone());
-                    let state = if *d == me {
-                        "this device"
-                    } else if trust.cutoffs.contains_key(d) {
-                        "revoked"
-                    } else if s.peers.contains_key(d) {
-                        "connected"
-                    } else {
-                        "offline"
-                    };
-                    format!("  {}  {:<20} {state}", d.to_hex(), name)
-                })
-                .collect();
-            Ok(lines.join("\n"))
-        }
+        "/peers" => Ok(api::devices(ctx)
+            .iter()
+            .map(|d| format!("  {}  {:<20} {}", d.id.to_hex(), d.name, state_name(d.state)))
+            .collect::<Vec<_>>()
+            .join("\n")),
         "/revoke" => match words.next() {
             None => Err(anyhow!("usage: /revoke ID")),
             Some(prefix) => find_member(ctx, prefix).and_then(|d| {
-                let op = ctx.revoke(d)?;
-                net::broadcast(ctx, op);
+                api::revoke(ctx, d)?;
                 Ok(format!("revoked {d}; its future operations will be rejected by every device"))
             }),
         },

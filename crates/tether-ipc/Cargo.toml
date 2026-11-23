@@ -1,0 +1,20 @@
+[package]
+name = "tether-ipc"
+description = "The local control protocol between tetherd and its clients (desktop app, CLI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tether-core.workspace = true
+tether-os.workspace = true
+anyhow.workspace = true
+postcard.workspace = true
+serde.workspace = true
+tokio.workspace = true
+blake3 = "1"
+getrandom = "0.4"
+hex = "0.4"
+keyring = "4"
+zeroize = "1"
