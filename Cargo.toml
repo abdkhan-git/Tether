@@ -8,8 +8,13 @@ edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 
+# Optimise dependencies (notably the Ed25519 and curve code) even in debug and
+# test builds; our own crates stay unoptimised for fast rebuilds and debugging.
+[profile.dev.package."*"]
+opt-level = 3
+
 [workspace.dependencies]
-tether-core = { path = "crates/tether-core" }
+tether-core = { path = "crates/tether-core", version = "0.1.0" }
 anyhow = "1"
 arboard = "3"
 clap = { version = "4", features = ["derive"] }
@@ -22,4 +27,3 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4", "serde"] }

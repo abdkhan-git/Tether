@@ -1,19 +1,26 @@
 //! Core types shared by every Tether component: device identities, clocks,
-//! operations, the replicated operation log and the wire protocol.
+//! signed operations, the replicated log with membership, the wire protocol,
+//! pairing, and the content policy.
 //!
 //! Nothing in this crate does I/O. That is deliberate: the same code runs in
 //! the real daemon and inside the deterministic simulator (`tether-sim`).
+//! (Pairing draws its SPAKE2 nonce from the OS random generator.)
+
+#![forbid(unsafe_code)]
 
 pub mod clock;
+pub mod content;
 pub mod hlc;
-pub mod id;
+pub mod identity;
+pub mod limits;
 pub mod log;
 pub mod op;
+pub mod pairing;
 pub mod wire;
 
 pub use clock::{Clock, SystemClock};
 pub use hlc::{Hlc, Timestamp};
-pub use id::DeviceId;
-pub use log::{ApplyResult, OpLog, VersionVector};
+pub use identity::{DeviceId, DeviceKey, Signature};
+pub use log::{derive_trust, ApplyResult, BatchOutcome, LocalError, OpLog, Rejection, Trust, VersionVector};
 pub use op::{Op, OpKind};
-pub use wire::Message;
+pub use wire::{DecodeError, Message};

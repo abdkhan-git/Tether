@@ -91,7 +91,7 @@ flowchart TB
         B_DB["Local storage<br/>SQLite (WAL) + chunk store on disk"]
         B_UI <--> B_CORE <--> B_DB
     end
-    A_CORE <-- "QUIC + Noise (LAN or direct)" --> B_CORE
+    A_CORE <-- "QUIC, mutual TLS 1.3 with pinned device keys (LAN or direct)" --> B_CORE
     CLOUD["Cloudflare Worker (free tier)<br/>Signaling: helps devices find each other<br/>Relay fallback: forwards ciphertext only"]
     A -. "connection setup" .-> CLOUD
     B -. "connection setup" .-> CLOUD
@@ -112,7 +112,7 @@ Rust for everything performance- or correctness-critical, TypeScript only for th
 | LAN discovery | mDNS via `mdns-sd` | Devices find each other with zero configuration |
 | Internet connectivity | STUN + UDP hole punching; relay fallback | Direct connections where NAT allows, relay otherwise |
 | Signaling and relay | Cloudflare Workers + Durable Objects (free tier) | Brokers connection setup only; sees encrypted bytes, never content |
-| Pairing and encryption | Noise protocol (`snow`), Ed25519 device keys, X25519 key exchange | Same framework WireGuard and WhatsApp use; mutual authentication without accounts |
+| Pairing and encryption | Ed25519 device keys; mutual TLS 1.3 (rustls) with pinned keys; SPAKE2 on a short code, bound to the TLS channel | Mutual authentication without accounts or a certificate authority. Chosen over a separate Noise layer (decided in P0): QUIC already provides TLS 1.3, so only a password-authenticated key exchange was missing |
 | Sync model | Own replicated operation log + CRDTs (own LWW-register and OR-set; Automerge for rich workspace state) | The core of the project; writing it yourself is the point |
 | Local storage | SQLite (WAL mode) via `rusqlite`; content-addressed chunk store on disk | Crash-safe, embedded, zero ops |
 | Hashing | BLAKE3 | Very fast content addressing for chunks and dedup |
@@ -178,14 +178,14 @@ QUIC connection migration keeps sessions alive when a laptop moves from Wi-Fi to
 **Pairing**
 
 - Each device generates an Ed25519 identity key on first launch, stored in the OS keychain.
-- Pairing uses a short code or QR code to run a Noise handshake with a password-authenticated key exchange, so a 6-digit code cannot be brute-forced offline.
+- Pairing uses a short code (QR later) to run SPAKE2, a password-authenticated key exchange, bound to the TLS channel's exported keying material, so a 6-digit code cannot be brute-forced offline and a relay in the middle is detected. Three attempts per two-minute window.
 - After pairing, devices pin each other's public keys. Every later connection is mutually authenticated by those keys.
 
 **Threat model**
 
 | Threat | Mitigation |
 | --- | --- |
-| Someone on the same Wi-Fi sniffs traffic | All traffic encrypted (QUIC TLS 1.3 + Noise-authenticated keys) |
+| Someone on the same Wi-Fi sniffs traffic | All traffic encrypted and mutually authenticated (QUIC TLS 1.3 with pinned device keys) |
 | Signaling or relay server is compromised | It only sees encrypted bytes and device IDs; cannot read or forge operations |
 | Attacker impersonates a device | Pinned keys; every operation signed |
 | Lost or stolen laptop | Revoke it from any other device; keys rotate; revoked device's new operations are rejected |

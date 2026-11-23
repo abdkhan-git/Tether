@@ -6,17 +6,27 @@ No one can promise software with zero vulnerabilities. This document makes a nar
 
 ## Current status (2026-11-23)
 
-The stage 1 daemon is a prototype and is **not safe on shared networks**. Known issues, all fixed by phase P0 in [ROADMAP.md](ROADMAP.md):
+Phase P0 is complete. The five issues found in the stage 1 prototype are fixed, each with a test that fails if the fix regresses:
 
-| ID | Issue | Impact |
+| ID | Issue (stage 1) | Fix (P0) | Proven by |
+| --- | --- | --- | --- |
+| V1 | Any host on the LAN could connect and read the clipboard history. | Mutual TLS 1.3 with pinned Ed25519 device keys (`tether-daemon/src/tls.rs`). Unknown keys fail the handshake; while a pairing window is open they may only run the pairing ceremony. | `security_e2e::paired_devices_sync_and_strangers_get_nothing` |
+| V2 | Received text went straight onto the system clipboard. | Content policy (`tether-core/src/content.rs`): commands that download-and-run, decode-and-run or destroy data, multi-line shell commands, and text with control or bidi characters are held in history. | `content::tests::pastejacking_shapes_are_held`, `security_e2e::incoming_commands_are_held_and_secrets_stay_local` |
+| V3 | Identity was self-asserted; operations were unsigned. | Identity comes from the TLS certificate key; every operation is signed and verified; membership and revocation are signed operations (`tether-core/src/log.rs`). | `log::tests::strangers_and_forgeries_are_refused`, simulator (149k injected forgeries across 10,000 seeds, none accepted) |
+| V4 | No limits. | Frame, operation, text, name and page limits checked on decode; 16 streams and 64 requests per second per connection; 32 connections; timeouts on handshakes, reads and pairing. | `wire::fuzz::*` (property tests on hostile bytes), `wire::tests::*` |
+| V5 | Secrets were synced. | The daemon detects keys, tokens and passwords and never puts them in the replicated log. | `content::tests::known_secrets_are_detected`, `security_e2e::incoming_commands_are_held_and_secrets_stay_local` |
+
+## Residual risks
+
+Known limits of the current design, stated plainly:
+
+| Risk | Why it remains | Plan |
 | --- | --- | --- |
-| V1 | Any host on the LAN can connect; certificates are not verified and clients are not authenticated (`AcceptAnyCert` in `tether-daemon/src/net.rs`). | A stranger on the same Wi-Fi can request and receive the full clipboard history. |
-| V2 | Received text is written to the system clipboard with no policy. | Clipboard injection: a malicious command waits for the next paste into a terminal. |
-| V3 | Device identity is self-asserted in `Hello`; operations are unsigned. | Impersonation of a paired device; forged history; hijacking a peer slot. |
-| V4 | No limits on connections, streams, message count or text size. | Memory exhaustion (denial of service). |
-| V5 | Sensitivity detection exists only in the UI. | Copied secrets are synced. |
-
-Until P0 lands, run `tetherd` only with `--stdin` on one machine, or on a network with no other users.
+| A compromised member is fully trusted until revoked, and could race to revoke others. | All devices are equal; there is no higher authority to appeal to. | A recovery key or a quorum for revocations (later stage). |
+| Clipboard history on disk is plain text, protected by the user's account permissions. | The interim store is a simple append-only file. | SQLite with encryption at rest, key in the credential store (P1). |
+| mDNS advertises that a machine runs Tether and its public device key. | Needed for zero-configuration discovery. | Option to turn discovery off (`--no-mdns` exists); rotating advertisement ids later. |
+| The content policy is pattern-based and can miss a cleverly disguised command. | No heuristic catches everything. | It is defence in depth: only paired devices can send content at all. |
+| Malware running as the same user can read the clipboard and the credential store. | Outside what an application can prevent. | Out of scope (see the adversary table). |
 
 ## What we protect, and from whom
 

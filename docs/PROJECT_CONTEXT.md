@@ -52,22 +52,28 @@ The cross-device workspace was the owner's own idea. It wins when combined with 
 - **Mobile is last** (iOS restricts background clipboard access).
 - **Roadmap:** stages 1–4 (~16 weeks part-time) to a public v1 with published benchmarks. Stage 2 (replicated log + simulator) is the core and gets the most time.
 
+## Later decisions (2026-11-23)
+
+- **Frontend:** neutral, Apple-like UI in `app/` built from vendored React Bits and Magic UI components; content-aware clipboard previews. The owner rejected a generic sidebar look and a black-and-gold "luxury" look.
+- **No account sign-in for trust.** Pairing and device keys decide trust; an account could at most help devices find each other later.
+- **Security is a hard requirement.** docs/SECURITY.md holds the rules; P0 (security foundation) came before any new feature.
+- **Feature direction:** "your computers act as one machine": flagships F1 to F10 in docs/ROADMAP.md.
+
 ## Build status (2026-11-23)
 
 Done and verified on Windows:
 
-- Cargo workspace: `tether-core` (DeviceId, HLC, Op, OpLog with version vectors, wire `Message`), `tether-daemon` (`tetherd`: mDNS discovery, QUIC, clipboard polling, `--stdin` and `--peer` modes), `tether-sim` (deterministic simulator).
-- 10 unit tests pass; clippy (`-D warnings`) and rustfmt clean.
-- Simulator: 10,000 seeds × 4 devices converged with 0 failures (~2M ops, ~198k injected faults, 3.4 s).
-- Two live daemons on one machine: catch-up after being offline works; live sync ~1.5 ms round trip on loopback; mDNS discovery works and only the lower device ID dials.
-- GitHub Actions CI for Windows, macOS and Linux plus a 10k-seed simulation job (not yet run on GitHub).
+- Phase P0 complete: Ed25519 device keys in the OS credential store; SPAKE2 pairing bound to the TLS channel; mutual TLS with pinned keys; signed operations; membership and revocation in the log; protocol limits and rate limits; content policy (secrets stay local, pastejacking held); durable log re-verified on load; reconnect loop.
+- 45 Rust tests pass (core, daemon, simulator), including 4 end-to-end tests that run real daemons over loopback QUIC (stranger refused, pastejacking held, secrets kept local, brute force stopped, revocation enforced). Clippy (`-D warnings`) and rustfmt clean.
+- Simulator: 10,000 seeds × 4 devices, 0 failures: 2.0M ops, 201k network faults, 149k forged or injected operations (none accepted), 3,923 compromised-and-revoked devices (206 s on 12 threads; seeds run in parallel because every op is now signed and verified, about 27 µs to sign and 84 µs to verify).
+- Live sync between two paired daemons on loopback: about 0.8 ms round trip including signing and verification.
+- Frontend: 36 unit tests for content detection; typecheck and build clean; `npm audit` clean.
 
-Not done yet (stage 1 checklist in the README):
+Not done yet:
 
-- Not tested between two physical machines or with the real clipboard.
-- Pairing/authentication: today any peer on the LAN can connect (encrypted but unauthenticated, certificate verification skipped).
-- Clipboard is polled every 100 ms; switch to OS change notifications.
-- No reconnect with backoff, no file send, no `tether-cli`, no Tauri tray app.
+- Not tested between two physical machines or with the real clipboard on two OSes.
+- Clipboard is polled every 100 ms; switch to OS change notifications (P1).
+- The UI is not connected to the daemon (P1); no Tauri shell, no `tether` CLI, no file send.
 
 ## Environment notes
 

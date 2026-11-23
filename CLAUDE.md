@@ -23,7 +23,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo run --release -p tether-sim -- --seeds 10000
-cargo run -p tether-daemon -- --stdin --name left    # two daemons on one machine
+cargo run -p tether-daemon -- --stdin --profile left  # two daemons on one machine: /pair in one, /join CODE ADDR in the other
 cd app && npm install && npm run dev                 # UI at http://localhost:1420
 cd app && npm run build                              # typecheck + tests + production build
 ```
