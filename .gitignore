@@ -1,3 +1,26 @@
+# Rust
 /target
 **/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Logs and local environment
+*.log
+.env
+.env.*
+!.env.example
+
+# Editors and OS
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local settings (shared CLAUDE.md is committed)
+.claude/settings.local.json
