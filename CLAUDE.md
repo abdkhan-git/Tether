@@ -6,6 +6,8 @@ Before planning or changing anything, read:
 
 - [docs/DESIGN.md](docs/DESIGN.md): the full design doc (architecture, sync protocol, security, roadmap).
 - [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md): why this project exists, what the owner is optimizing for (big-tech offer; latency, race conditions, correctness), ideas rejected, key decisions, and current build status.
+- [docs/SECURITY.md](docs/SECURITY.md): threat model, the rules every change must follow, the capability model, and known open vulnerabilities. Security is a hard requirement from the owner.
+- [docs/ROADMAP.md](docs/ROADMAP.md): the flagship features (F1 to F10), how each stays safe, and the phase order (P0 security foundation first).
 
 ## Layout
 
@@ -28,6 +30,7 @@ cd app && npm run build                              # typecheck + tests + produ
 
 ## Conventions
 
+- Follow the rules in docs/SECURITY.md on every change: authenticate before serving anything, verify signed operations, never execute received content, gate powerful features behind capabilities that are off by default and confirmed on the affected device, bound every input, no `unsafe` outside the OS-integration crate, never log secrets. New features need a threat model (template in SECURITY.md) and a test or invariant for their security property.
 - Every change to sync logic must keep the simulator green; add an invariant or fault when adding a feature.
 - Never hold the `std::sync::Mutex` in the daemon across an `.await`.
 - Performance claims in the README must be measured, with hardware and method stated.
