@@ -2679,6 +2679,7 @@ dependencies = [
  "tether-cli",
  "tether-core",
  "tether-ipc",
+ "tether-os",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2707,10 +2708,14 @@ dependencies = [
 name = "tether-os"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "dirs",
  "libc",
+ "objc2-app-kit",
+ "objc2-foundation",
  "tokio",
  "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

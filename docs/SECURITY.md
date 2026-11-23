@@ -205,6 +205,45 @@ Residual risk the user should know about: --full prints long text verbatim apart
   this tool's control.
 ```
 
+### Clipboard change events and app privacy marks (P1.4)
+
+```
+Feature: the daemon learns about copies from the OS instead of polling every 100 ms
+  (crates/tether-os/src/clipboard*, crates/tether-daemon/src/input.rs), and honours the marks
+  that password managers and other apps put on private copies.
+Capability it needs: none new (it reads this device's own clipboard, as before).
+What an attacker gains if it is abused: a password copied from a password manager synced
+  to every device and stored in history; or, through a bug in the OS glue, memory unsafety
+  in the daemon.
+Who could abuse it: any local app that writes the clipboard (it controls the content and
+  the formats); a race between reading the content and reading its marks.
+Mitigations:
+  - Private marks are honoured on top of the pattern-based secret detection:
+    Windows: ExcludeClipboardContentFromMonitorProcessing, Clipboard Viewer Ignore,
+    CanIncludeInClipboardHistory = 0, CanUploadToCloudClipboard = 0 (the formats Windows'
+    own clipboard history and cloud sync honour). If a flag is present but cannot be read,
+    the copy is treated as private (fail closed).
+    macOS: org.nspasteboard.ConcealedType and org.nspasteboard.TransientType.
+    A marked copy is never put in the log, never synced, never stored.
+  - Content and marks are read as one snapshot: the OS clipboard sequence number (Windows
+    GetClipboardSequenceNumber, macOS changeCount) is read before and after; if it moved,
+    the read is discarded and the next change event reads again. So a private copy cannot
+    slip through under the marks of the copy before it.
+  - All unsafe code lives in tether-os (a message-only window with AddClipboardFormatListener;
+    reading a 4-byte flag under GlobalLock), each block with a SAFETY comment.
+  - The daemon's own writes (applying a copy from a peer) are recognised and not echoed back.
+Limits: events are coalesced: a burst of notifications for one copy causes one read.
+Test or invariant proving the main property: tether-daemon input::tests (marks travel with
+  the copy; the daemon's own writes are not echoed; order is kept between local copies and
+  deliveries), ctx::tests (a marked copy is kept local and not logged); tether-os
+  clipboard tests marked #[ignore] because they use the real clipboard (marks are detected,
+  a change is reported, latency measured), run by hand on Windows.
+Residual risk the user should know about: an app that marks nothing and whose content the
+  pattern detector misses will still sync. Linux has no mark support yet (KDE's
+  x-kde-passwordManagerHint is the candidate), and on Wayland and headless Linux the daemon
+  falls back to polling every 100 ms.
+```
+
 ## Threat model template (one per feature)
 
 ```

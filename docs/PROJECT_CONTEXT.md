@@ -67,7 +67,8 @@ Done and verified on Windows:
 - P1 step 1, encrypted storage: the log and group root live in SQLite (WAL, synchronous=FULL, exclusive lock), each value sealed with XChaCha20-Poly1305 under a key in the OS credential store and bound to its row. Checked on Windows with the real Credential Manager: the keys persist, the database survives a hard kill, and no plain text reaches disk.
 - P1 step 2, local control channel: a named pipe with a protected, owner-only DACL (read back in tests and checked live with `Get-Acl`), or a 0600 Unix socket with peer-uid checks; both ends prove knowledge of a per-run token (keyed BLAKE3 over both nonces); bounded frames, 8 clients, 5 s to authenticate. API: status, devices, paged history, pair, join, revoke, events. The console uses the same code path.
 - P1 step 3, `tether` CLI: status, devices, history (paged), watch, pair (waits for the other device), join, revoke (confirms first). Everything a peer chose (clipboard text, names) is sanitised before printing, so escape sequences such as OSC 52 cannot act on the terminal.
-- 85 Rust tests pass (cli, core, daemon, ipc, os, simulator), including 4 end-to-end tests of the CLI, 6 of the control channel and 4 end-to-end tests that run real daemons over loopback QUIC (stranger refused, pastejacking held, secrets kept local, brute force stopped, revocation enforced). Clippy (`-D warnings`) and rustfmt clean.
+- P1 step 4, clipboard change events: Windows `AddClipboardFormatListener` (no polling), X11 XFixes, macOS `changeCount` every 50 ms, polling only as a fallback. Copies that password managers mark private (Windows `ExcludeClipboardContentFromMonitorProcessing` / `CanUploadToCloudClipboard=0` / `CanIncludeInClipboardHistory=0`; macOS nspasteboard.org types) stay local. Measured on Windows 11, Core i7-1265U: change detected in 1.1 ms p50; copy on one daemon to printed by another over loopback QUIC in 4.0 ms p50.
+- 97 Rust tests pass (cli, core, daemon, ipc, os, simulator), plus 3 ignored ones that use the real clipboard and were run by hand; including 4 end-to-end tests of the CLI, 6 of the control channel and 4 end-to-end tests that run real daemons over loopback QUIC (stranger refused, pastejacking held, secrets kept local, brute force stopped, revocation enforced). Clippy (`-D warnings`) and rustfmt clean.
 - Simulator: 10,000 seeds × 4 devices, 0 failures: 2.0M ops, 201k network faults, 149k forged or injected operations (none accepted), 3,923 compromised-and-revoked devices (206 s on 12 threads; seeds run in parallel because every op is now signed and verified, about 27 µs to sign and 84 µs to verify).
 - Live sync between two paired daemons on loopback: about 0.8 ms round trip including signing and verification.
 - Frontend: 36 unit tests for content detection; typecheck and build clean; `npm audit` clean.
@@ -75,7 +76,6 @@ Done and verified on Windows:
 Not done yet:
 
 - Not tested between two physical machines or with the real clipboard on two OSes.
-- Clipboard is polled every 100 ms; switch to OS change notifications (P1).
 - The UI is not connected to the daemon (P1); no Tauri shell, no `tether` CLI, no file send.
 
 ## Environment notes

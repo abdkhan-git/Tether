@@ -24,17 +24,18 @@ Keep this file short and factual. Every claim here should be something the code 
 
 ## Current state (2026-11-23)
 
-**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** step 1, encrypted storage (`9f6de96`), and step 2, the local control channel (`2cc9f81`), are committed; step 3, the `tether` CLI, is done (not yet committed when this was written).
+**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** steps 1 to 3 are committed (encrypted storage `9f6de96`, control channel `2cc9f81`, CLI `8c725bb`); step 4, clipboard change events, is done (not yet committed when this was written).
 
 Verified on Windows:
 
-- **Rust tests:** `cargo test --workspace` passes all 85: 6 `tether-cli`, 34 core, 12 daemon unit (9 for the store), 4 CLI end-to-end, 6 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 7 `tether-os` and 2 simulator.
-- **Mutation checks:** raising the client cap to 9, or making the server skip the client's proof, each makes a `control_e2e` test fail. Letting ESC through `term::safe` makes `cli_e2e::escape_sequences_from_a_peer_never_reach_the_terminal` fail.
+- **Rust tests:** `cargo test --workspace` passes all 97: 6 `tether-cli`, 34 core, 20 daemon unit (9 store, 7 clipboard logic, 1 privacy mark), 4 CLI end-to-end, 6 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 11 `tether-os` and 2 simulator. 3 more are `#[ignore]`d because they use the real clipboard; all 3 pass when run by hand (see below).
+- **Real clipboard (run by hand):** `cargo test -p tether-os --release -- --ignored --test-threads=1 --nocapture` (marks detected; change detected in p50 1.1 ms, p99 7.6 ms over 100 copies) and `cargo test -p tether-daemon --release --test clipboard_e2e -- --ignored --nocapture` (copy on A to printed by B over loopback in p50 4.0 ms, p95 5.4 ms; all three privacy marks keep the copy on A; B's copy lands on A's clipboard and is not echoed). Windows 11, Intel Core i7-1265U, 15 GB. Both restore the clipboard text afterwards.
+- **Mutation checks:** raising the client cap to 9, or making the server skip the client's proof, each makes a `control_e2e` test fail. Letting ESC through `term::safe` makes `cli_e2e::escape_sequences_from_a_peer_never_reach_the_terminal` fail. Making `marked_private` always false makes `clipboard_e2e` fail.
 - **CLI, live:** the real `tether.exe` against a non-ephemeral daemon read the token from Credential Manager and ran `status`, `devices`, `history`, `pair --no-wait`, and a refused `revoke` of this device (exit code 1). With no daemon running it says "no control token for profile …: is tetherd running?". The test profile was deleted afterwards.
 - **Control channel, live:** a non-ephemeral `tetherd` created `\\.\pipe\tether-<SID>-<profile>`; `Get-Acl` showed the owner as the user, a protected DACL, and one entry (the user, FullControl). The token was in Credential Manager. The test profile and its credentials were deleted afterwards.
-- **Unix code:** `tether-os` passes clippy `-D warnings` for Linux and macOS, and `tether-ipc` for Linux, type-checked from Windows (`rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin`). The Unix tests have not run yet; CI will run them. The macOS check of `tether-ipc` cannot run from Windows (blake3 needs a C compiler for that target).
+- **Unix code:** `tether-os` (local channel, and clipboard: macOS `changeCount` and nspasteboard.org marks, X11 XFixes) passes clippy `-D warnings` for Linux and macOS, and `tether-ipc` for Linux, type-checked from Windows (`rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin`). None of it has run yet; CI runs the Unix tests, but CI has no desktop, so the macOS and X11 clipboard code needs a check on a real Mac and a Linux desktop. The macOS check of `tether-ipc` cannot run from Windows (blake3 needs a C compiler for that target).
 - **Lints:** `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check` are clean.
-- **Simulator:** the last full run (at P0) gave 0 failures across 10,000 seeds: 2.0M ops, 201k network faults, 149k injected forgeries (none accepted), 3,923 revocations, 206 s on 12 threads. P1.1 did not touch `tether-core` or `tether-sim`, so it was not re-run; its 2 test-suite seeds pass.
+- **Simulator:** the last full run (at P0) gave 0 failures across 10,000 seeds: 2.0M ops, 201k network faults, 149k injected forgeries (none accepted), 3,923 revocations, 206 s on 12 threads. P1 so far has changed no sync logic in `tether-core` (only a serde derive on `HoldReason`), so it was not re-run; its 2 test-suite seeds pass.
 - **Supply chain:** `cargo deny check advisories licenses bans sources` passes. The duplicate-version warnings are expected (spake2 pulls in curve25519 v4); P1.1 added no new duplicates. `npm audit` reports 0 vulnerabilities.
 - **Frontend:** `cd app && npm run build` passes, including 36 content-detection tests.
 - **Real credential store:** with a throwaway profile, `tetherd` saved both keys in Windows Credential Manager (`device-key/<profile>.Tether`, `db-key/<profile>.Tether`). It kept the same identity across a hard kill, reloaded its operation (the next copy got `seq=2`), and no plain text reached the data folder. The profile was deleted afterwards.
@@ -62,7 +63,8 @@ Not verified yet:
 | Daemon state and policy | `crates/tether-daemon/src/ctx.rs` (never hold its mutex across `.await`) |
 | Networking | `crates/tether-daemon/src/net.rs` (accept loop, sessions, pull and broadcast, reconnect every 5 s) |
 | Storage | `crates/tether-daemon/src/store.rs` (SQLite `tether.db` in `%LOCALAPPDATA%\Tether\<profile>`; every value sealed with XChaCha20-Poly1305 and bound to its row; re-verified on load; imports and deletes the old P0 `ops.log`), `keystore.rs` (device key and database key in the credential store) |
-| Commands | `crates/tether-daemon/src/api.rs` (what the daemon can be asked: status, devices, history paging, pair, join, revoke; shared by console and channel), `control.rs` (stdin console: `/pair`, `/join`, `/peers`, `/revoke`, `/whoami`, `/help`), `input.rs` (clipboard polled every 100 ms) |
+| Commands | `crates/tether-daemon/src/api.rs` (what the daemon can be asked: status, devices, history paging, pair, join, revoke; shared by console and channel), `control.rs` (stdin console: `/pair`, `/join`, `/peers`, `/revoke`, `/whoami`, `/help`) |
+| Clipboard | `crates/tether-os/src/clipboard.rs` (`watch`, `poll`, `sequence`, `marked_private`, `Mode`) with `clipboard/windows.rs` (message-only window plus `AddClipboardFormatListener`; privacy formats; `write_text_with_formats` for tests), `macos.rs` (`changeCount` every 50 ms; nspasteboard.org types), `x11.rs` (XFixes; polls under Wayland or with no display; no marks yet); `crates/tether-daemon/src/input.rs` (`Mirror`: one channel of `Clip::{Changed, Delivered}`, event bursts collapsed, own writes not echoed, snapshot read guarded by the sequence number) |
 | Local control channel | `crates/tether-os/src/local.rs` + `local/windows.rs` (owner-only pipe, SID in the name, first-instance, the crate's only `unsafe`) and `local/unix.rs` (0600 socket in a checked 0700 dir, peer uid); `crates/tether-ipc` (`frame`, `auth` handshake, `proto`, `token` in the credential store, `client`); `crates/tether-daemon/src/ipc.rs` (server: 8 clients, 5 s auth, events via `Ctx::emit`) |
 | CLI | `crates/tether-cli/src/lib.rs` (`Cli`, `Command`, `Target`, `run` writes to any `Write` and reads prompts from any `BufRead`), `term.rs` (`safe` sanitiser, previews, "3 min ago"), `main.rs` (the `tether` binary) |
 | End-to-end tests | `crates/tether-daemon/tests/security_e2e.rs`, `control_e2e.rs`, `cli_e2e.rs` (CLI run in-process against real daemons), shared harness in `tests/common/mod.rs` (`Daemon::with_control` passes a token through `TETHER_CONTROL_TOKEN`) |
@@ -88,11 +90,11 @@ The steps below are in order, because each depends on the ones before it.
 - [x] **3. `tether` CLI.** Done 2026-11-23 in `crates/tether-cli` (binary `tether`, global `--profile`). Threat model in SECURITY.md ("`tether` CLI").
   - `status`; `devices`; `history [-n N] [--full]` (pages through the daemon 100 at a time); `watch [--count N]` (stops after N copies); `pair [--no-wait]` (by default waits until a new member appears or the window closes); `join CODE [ADDR]`; `revoke ID [--yes]` (a prefix of at least 4 characters naming one current member; asks y/N; refuses this device and already-revoked ones).
   - Everything the daemon returns is printed through `term::safe`: C0/C1 controls and DEL become visible symbols, bidi controls become U+FFFD, and newlines are kept only with `--full`. Errors are sanitised too.
-- [ ] **4. OS clipboard change events** instead of polling every 100 ms.
-  - Windows: `AddClipboardFormatListener`.
-  - macOS: watch `changeCount` (there is no change notification).
-  - Linux: X11 XFixes, with polling as the fallback.
-  - This needs `unsafe`, so it goes in `tether-os` (it exists now; add a `clipboard` module). Every `unsafe` block gets a `// SAFETY:` comment (clippy enforces it there), and every other crate keeps `#![forbid(unsafe_code)]`.
+- [x] **4. OS clipboard change events.** Done 2026-11-23. Threat model in SECURITY.md ("Clipboard change events and app privacy marks").
+  - Windows: `AddClipboardFormatListener`, no polling. macOS: `changeCount` every 50 ms. Linux: X11 XFixes; polling every 100 ms under Wayland or with no display. The daemon logs which mode it is in (`watching the clipboard mode=...`).
+  - Added beyond the original plan: copies that their app marks private are kept local (Windows `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0`, and an unreadable flag counts as private; macOS `org.nspasteboard.ConcealedType` and `TransientType`). Content and mark are read as one snapshot, checked with the clipboard sequence number.
+  - Deliveries from peers now apply at once (before, they waited for the next 100 ms poll).
+  - Follow-ups: Linux marks (`x-kde-passwordManagerHint`); the Wayland data-control protocol; a check of the macOS and X11 code on real desktops.
 - [ ] **5. Reconnect with backoff.** Replace the fixed 5 s loop in `net.rs` with exponential backoff and jitter. Reset it when a connection succeeds. Make it testable without sleeping.
 - [ ] **6. Tauri shell and tray.**
   - Wrap `app/` in Tauri v2.
@@ -120,7 +122,7 @@ The steps below are in order, because each depends on the ones before it.
 ## Gotchas
 
 - Run the simulator with `--release`. In debug builds it is far slower because every op is signed and verified.
-- The end-to-end tests start real `tetherd` processes with `--ephemeral --stdin --no-mdns --port 0`. They never touch the system clipboard or the keychain.
+- The end-to-end tests start real `tetherd` processes with `--ephemeral --stdin --no-mdns --port 0`. They never touch the keychain, and only the `#[ignore]`d ones (`clipboard_e2e`, and the `tether-os` clipboard tests) touch the system clipboard. Those overwrite what you have copied while they run and restore only text, so an image on the clipboard is lost.
 - `deny.toml` bans openssl and wildcard versions. An internal path dependency needs `version = "0.1.0"`.
 - The frontend pins `vitest@^3.2` because the latest Vitest did not work with Vite 6.
 - On Windows, edit files with the Edit tool rather than heredocs in the shell, because quoting breaks.
@@ -143,3 +145,4 @@ The steps below are in order, because each depends on the ones before it.
 | 2026-11-23 | P1.1 encrypted storage | Confirmed P0 has nothing open beyond its planned deferrals; SQLite with per-row XChaCha20-Poly1305; 52 tests; checked with the real Windows Credential Manager |
 | 2026-11-23 | P1.2 local control channel | New crates `tether-os` (owner-only pipe/socket) and `tether-ipc` (mutual token handshake, protocol, client); daemon `api.rs` shared by console and channel; 75 tests; live pipe ACL checked with `Get-Acl` |
 | 2026-11-23 | P1.3 `tether` CLI | New crate `tether-cli`; terminal-escape sanitiser; pair waits for the join; revoke confirms; 85 tests; real binary checked against a live daemon |
+| 2026-11-23 | P1.4 clipboard events | `tether-os::clipboard` (Windows listener, macOS changeCount, X11 XFixes, polling fallback); password-manager privacy marks honoured; 97 tests plus 3 real-clipboard tests run by hand; copy to peer 4.0 ms p50 over loopback |

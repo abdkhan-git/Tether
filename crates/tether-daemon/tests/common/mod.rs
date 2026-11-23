@@ -38,7 +38,12 @@ pub fn unique_profile(name: &str) -> String {
 
 fn command(name: &str, extra: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tetherd"));
-    cmd.args(["--ephemeral", "--stdin", "--no-mdns", "--port", "0", "--name", name])
+    cmd.arg("--stdin");
+    with_args(cmd, name, extra)
+}
+
+fn with_args(mut cmd: Command, name: &str, extra: &[&str]) -> Command {
+    cmd.args(["--ephemeral", "--no-mdns", "--port", "0", "--name", name])
         .args(extra)
         .env("RUST_LOG", "info")
         .env("NO_COLOR", "1")
@@ -49,6 +54,12 @@ fn command(name: &str, extra: &[&str]) -> Command {
 impl Daemon {
     pub fn start(name: &str, extra: &[&str]) -> Self {
         Self::spawn(command(name, extra))
+    }
+
+    /// Start a daemon on the real system clipboard (no `--stdin`). Its stdin
+    /// still takes console commands. Only for `#[ignore]`d tests.
+    pub fn on_system_clipboard(name: &str) -> Self {
+        Self::spawn(with_args(Command::new(env!("CARGO_BIN_EXE_tetherd")), name, &[]))
     }
 
     /// Start a daemon with its local control channel open.
@@ -123,12 +134,17 @@ impl Daemon {
 
     /// The first line containing `needle` after `from`, waiting up to 10 s.
     pub fn wait_for(&self, needle: &str, from: usize) -> Option<String> {
+        self.wait_for_every(needle, from, Duration::from_millis(50))
+    }
+
+    /// As `wait_for`, checking every `step` (fine-grained, for timing).
+    pub fn wait_for_every(&self, needle: &str, from: usize, step: Duration) -> Option<String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if let Some(line) = self.since(from).lines().find(|l| l.contains(needle)) {
                 return Some(line.to_string());
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(step);
         }
         None
     }

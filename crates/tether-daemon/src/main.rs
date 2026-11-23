@@ -28,7 +28,8 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::ctx::Ctx;
-use crate::input::Line;
+use crate::ctx::Deliver;
+use crate::input::{Clip, Line, LocalCopy};
 use crate::tls::Gate;
 
 #[derive(Parser, Debug)]
@@ -127,9 +128,17 @@ async fn main() -> Result<()> {
     let tls_id = tls::identity(&key)?;
     drop(key);
 
-    let (deliver_tx, deliver_rx) = std::sync::mpsc::channel();
+    // One channel wakes the clipboard (or stdout) thread: deliveries from the
+    // daemon, and clipboard change events from the OS.
+    let (clip_tx, clip_rx) = std::sync::mpsc::channel::<Clip>();
+    let deliver: Deliver = {
+        let tx = clip_tx.clone();
+        Arc::new(move |d| {
+            let _ = tx.send(Clip::Delivered(d));
+        })
+    };
     let gate = Arc::new(RwLock::new(Gate::default()));
-    let ctx = Ctx::new(log, args.name.clone(), store, gate, tls_id, clock, deliver_tx);
+    let ctx = Ctx::new(log, args.name.clone(), store, gate, tls_id, clock, deliver);
     if ctx.lock().log.is_revoked() {
         warn!("this device was revoked by its group; it will not sync. Pair it again to rejoin.");
     }
@@ -160,12 +169,13 @@ async fn main() -> Result<()> {
     };
     info!(device = %ctx.me().to_hex(), name = %ctx.name(), port, members = ctx.lock().log.trust().members.len(), "tetherd started (type /help for commands)");
 
-    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<String>();
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<LocalCopy>();
     let (line_tx, mut line_rx) = mpsc::unbounded_channel::<Line>();
     if args.stdin {
-        input::spawn_stdout(deliver_rx);
+        drop(clip_tx);
+        input::spawn_stdout(clip_rx);
     } else {
-        input::spawn_clipboard(local_tx, deliver_rx);
+        input::spawn_clipboard(local_tx, clip_tx, clip_rx);
     }
     input::spawn_stdin(line_tx, args.stdin);
 
@@ -178,10 +188,10 @@ async fn main() -> Result<()> {
 
     loop {
         tokio::select! {
-            Some(text) = local_rx.recv() => copied(&ctx, text),
+            Some(copy) = local_rx.recv() => copied(&ctx, copy),
             Some(line) = line_rx.recv() => match line {
                 Line::Command(cmd) => control::handle(&ctx, &endpoint, &cmd).await,
-                Line::Text(text) => copied(&ctx, text),
+                Line::Text(text) => copied(&ctx, LocalCopy { text, private: false }),
             },
             _ = tokio::signal::ctrl_c() => break,
         }
@@ -198,8 +208,8 @@ async fn main() -> Result<()> {
 }
 
 /// A local copy: record it (unless it must stay local) and push it to peers.
-fn copied(ctx: &Ctx, text: String) {
-    if let Some(op) = ctx.local_copy(text) {
+fn copied(ctx: &Ctx, copy: LocalCopy) {
+    if let Some(op) = ctx.local_copy(copy.text, copy.private) {
         net::broadcast(ctx, op);
     }
 }

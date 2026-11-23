@@ -12,12 +12,29 @@ tokio.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 dirs = "7"
+
+# Clipboard change detection. Both are already in the tree through arboard.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb = { version = "0.13", features = ["xfixes"] }
+
+[dev-dependencies]
+# Saves and restores the tester's clipboard text around the #[ignore]d clipboard tests.
+arboard.workspace = true

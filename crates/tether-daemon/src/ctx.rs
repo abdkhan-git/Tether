@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -36,7 +35,15 @@ pub enum Delivered {
     Held { from: DeviceId, reason: HoldReason, preview: String },
     /// Copied here, looks like a secret, kept local and not synced.
     KeptLocal(&'static str),
+    /// Copied here, marked private by the app that copied it; kept local.
+    MarkedPrivate,
 }
+
+/// Hands deliveries to whoever shows them (the clipboard thread, or stdout).
+pub type Deliver = Arc<dyn Fn(Delivered) + Send + Sync>;
+
+/// What `Event::KeptLocal` says about a copy its app marked private.
+pub const MARKED_PRIVATE: &str = "copy its app marked private";
 
 pub struct PairWindow {
     pub code: String,
@@ -81,7 +88,7 @@ pub struct Ctx {
     pub gate: SharedGate,
     pub tls: Arc<TlsIdentity>,
     pub clock: Arc<dyn Clock>,
-    deliver: Sender<Delivered>,
+    deliver: Deliver,
     /// Fans state changes out to control-channel subscribers.
     pub events: broadcast::Sender<Event>,
 }
@@ -113,7 +120,7 @@ impl Ctx {
         gate: SharedGate,
         tls: TlsIdentity,
         clock: Arc<dyn Clock>,
-        deliver: Sender<Delivered>,
+        deliver: Deliver,
     ) -> Self {
         let state = State {
             log,
@@ -181,10 +188,16 @@ impl Ctx {
     }
 
     /// Record something copied on this device. Returns the operation to
-    /// broadcast, or `None` if it must not leave this device.
-    pub fn local_copy(&self, text: String) -> Option<Op> {
+    /// broadcast, or `None` if it must not leave this device: the app that
+    /// copied it marked it `private`, or it looks like a secret.
+    pub fn local_copy(&self, text: String, private: bool) -> Option<Op> {
+        if private {
+            (self.deliver)(Delivered::MarkedPrivate);
+            self.emit(Event::KeptLocal { kind: MARKED_PRIVATE.to_string() });
+            return None;
+        }
         if let Some(kind) = content::secret_kind(&text) {
-            let _ = self.deliver.send(Delivered::KeptLocal(kind));
+            (self.deliver)(Delivered::KeptLocal(kind));
             self.emit(Event::KeptLocal { kind: kind.to_string() });
             return None;
         }
@@ -276,7 +289,7 @@ impl Ctx {
             (out, delivery, changed, new_items)
         };
         if let Some(d) = delivery {
-            let _ = self.deliver.send(d);
+            (self.deliver)(d);
         }
         if new_items.len() > MAX_ITEM_EVENTS {
             self.emit(Event::HistoryChanged);
@@ -414,9 +427,38 @@ impl Ctx {
 mod tests {
     use super::*;
 
+    use std::sync::RwLock;
+    use tether_core::{DeviceKey, SystemClock};
+
     #[test]
     fn names_are_cleaned_and_bounded() {
         assert_eq!(clean_name("Laptop\u{1b}[31m\u{202E}x"), "Laptop[31mx");
         assert!(clean_name(&"é".repeat(100)).len() <= MAX_NAME_BYTES);
+    }
+
+    /// A daemon context with no network, recording what it delivers.
+    fn ctx() -> (Ctx, Arc<Mutex<Vec<Delivered>>>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let key = DeviceKey::for_test(1);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let deliver: Deliver = Arc::new(move |d| sink.lock().unwrap().push(d));
+        let tls = crate::tls::identity(&key).unwrap();
+        let gate = Arc::new(RwLock::new(crate::tls::Gate::default()));
+        (Ctx::new(OpLog::new(key), "test".into(), None, gate, tls, Arc::new(SystemClock), deliver), seen)
+    }
+
+    #[test]
+    fn a_copy_marked_private_is_kept_local_and_not_logged() {
+        let (ctx, seen) = ctx();
+        let mut events = ctx.events.subscribe();
+        assert!(ctx.local_copy("hunter2-but-not-pattern-shaped".into(), true).is_none());
+        assert!(ctx.lock().log.is_empty(), "nothing was logged");
+        assert!(matches!(seen.lock().unwrap().as_slice(), [Delivered::MarkedPrivate]));
+        assert_eq!(events.try_recv().unwrap(), Event::KeptLocal { kind: MARKED_PRIVATE.into() });
+
+        // The same text without the mark is an ordinary copy.
+        assert!(ctx.local_copy("hunter2-but-not-pattern-shaped".into(), false).is_some());
+        assert_eq!(ctx.lock().log.len(), 1);
     }
 }
