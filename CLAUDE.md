@@ -13,6 +13,7 @@ Some steps can only be done with two real machines. The owner has a Windows desk
 1. **P1 step 7, the two-machine check:** build the app on both machines, pair them, copy both ways, turn on "Open at sign-in", reboot each machine and record how long sync takes to resume. This is also the first real run of the macOS tray, WKWebView, Keychain and `changeCount` clipboard code. Record hardware, network and method for every number.
 2. **P1 step 8, close out P1** (ROADMAP, SECURITY status table, PROJECT_CONTEXT, README, HANDOFF).
 3. **P2's published latency:** p50/p99 copy-to-paste latency between the two machines, for the README.
+4. **F2 Flow (one keyboard and mouse),** which needs both machines side by side: build and measure it then (HANDOFF.md has the plan).
 
 Until then, keep working on single-machine items from HANDOFF "Next up". Test multi-device behaviour with two profiles on one machine (`--profile left` / `--profile right`, `npx tauri dev -- -- --profile left`) and the simulator, and say plainly which results came from one machine.
 

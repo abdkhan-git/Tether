@@ -7,7 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tether_core::{DeviceId, DeviceKey, ItemId, Op, OpKind, OpLog, Timestamp};
+use tether_core::notes::Doc;
+use tether_core::{DeviceId, DeviceKey, ItemId, NoteRef, Op, OpKind, OpLog, Timestamp};
 
 /// SplitMix64: tiny, fast, and fully reproducible across platforms.
 pub struct Rng(u64);
@@ -69,6 +70,8 @@ pub struct Report {
     pub deletes: usize,
     /// Items sent to one device.
     pub sends: usize,
+    /// Edits typed into notes.
+    pub note_edits: usize,
     /// Device renames.
     pub renames: usize,
     pub revoked: bool,
@@ -87,6 +90,9 @@ struct Device {
     created: u64,
     /// Set when the device is compromised and revoked: (cutoff seq).
     revoked_after: Option<u64>,
+    /// Notes kept in memory and updated edit by edit as they arrive, the way
+    /// the daemon does (rebuilt from the log when membership changes).
+    docs: BTreeMap<NoteRef, Doc>,
 }
 
 pub fn run(seed: u64, cfg: &Config) -> Report {
@@ -103,6 +109,7 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
             partitioned: false,
             created: 0,
             revoked_after: None,
+            docs: BTreeMap::new(),
         })
         .collect();
     let root = devices[0].log.me();
@@ -190,6 +197,35 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
                 devices[d].created += 1;
                 report.sends += 1;
             }
+        } else if roll < 52 {
+            // Notes: create one now and then; otherwise type, delete or
+            // replace at a random place in a note this device can see.
+            let d = rng.below(n as u64) as usize;
+            let t = physical(now, devices[d].skew_ms);
+            let notes: Vec<NoteRef> = devices[d].log.notes().into_keys().collect();
+            if notes.is_empty() || (notes.len() < 3 && rng.chance(0.05)) {
+                let op = devices[d]
+                    .log
+                    .append_local(OpKind::NoteCreate { title: format!("d{d}-note") }, t)
+                    .expect("within limits");
+                feed(&mut devices[d], &[op], false);
+            } else {
+                let note = notes[rng.below(notes.len() as u64) as usize];
+                let doc = devices[d].log.note_doc(note).expect("listed notes exist");
+                let len = doc.chars().len();
+                let at = rng.below(len as u64 + 1) as usize;
+                let delete = (rng.below(4) as usize).min(len - at);
+                let text: String = (0..rng.below(7)).map(|_| char::from(b'a' + rng.below(26) as u8)).collect();
+                if delete == 0 && text.is_empty() {
+                    continue;
+                }
+                let edit =
+                    doc.local_edit(devices[d].log.next_note_counter(), at, delete, &text).expect("within limits");
+                let op = devices[d].log.append_local(OpKind::NoteEdit { note, edit }, t).expect("within limits");
+                feed(&mut devices[d], &[op], false);
+                report.note_edits += 1;
+            }
+            devices[d].created += 1;
         } else {
             let from = rng.below(n as u64) as usize;
             let to = (from + 1 + rng.below(n as u64 - 1) as usize) % n;
@@ -232,7 +268,8 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
 
     report.failure = check_local_invariants(&devices)
         .or_else(|| check_convergence(&devices))
-        .or_else(|| check_marks(&devices, &marks));
+        .or_else(|| check_marks(&devices, &marks))
+        .or_else(|| check_notes(&devices));
     report
 }
 
@@ -268,8 +305,48 @@ fn sync(devices: &mut [Device], from: usize, to: usize, now: u64, fault_rate: f6
         }
     }
     let t = physical(now, devices[to].skew_ms);
-    let applied = devices[to].log.apply_batch(batch, t).applied;
+    let applied = apply_to(&mut devices[to], batch, t);
     (clean, applied)
+}
+
+/// Apply a batch from the network to `d`, and feed the operations that were
+/// new to its in-memory notes, in the order they arrived (faults reorder and
+/// duplicate them). Returns how many were applied.
+fn apply_to(d: &mut Device, batch: Vec<Op>, t: u64) -> usize {
+    let before = d.log.version_vector();
+    let out = d.log.apply_batch(batch.clone(), t);
+    let after = d.log.version_vector();
+    let mut seen = BTreeSet::new();
+    let fresh: Vec<Op> = batch
+        .into_iter()
+        .filter(|op| {
+            let had = before.get(&op.device).copied().unwrap_or(0);
+            let has = after.get(&op.device).copied().unwrap_or(0);
+            op.seq > had && op.seq <= has && seen.insert(op.id())
+        })
+        .collect();
+    feed(d, &fresh, out.membership_changed);
+    out.applied
+}
+
+/// Keep `d`'s in-memory notes current, as the daemon does: apply each new
+/// edit as it comes, or rebuild everything from the log after a membership
+/// change (which can prune operations).
+fn feed(d: &mut Device, fresh: &[Op], rebuild: bool) {
+    if rebuild {
+        let notes = d.log.note_refs();
+        d.docs = notes.into_iter().map(|n| (n, d.log.build_note(n))).collect();
+        return;
+    }
+    for op in fresh {
+        match &op.kind {
+            OpKind::NoteCreate { .. } => {
+                d.docs.entry(NoteRef { device: op.device, seq: op.seq }).or_default();
+            }
+            OpKind::NoteEdit { note, edit } => d.docs.entry(*note).or_default().apply(op.device, edit),
+            _ => {}
+        }
+    }
 }
 
 /// An honest device revokes another (not the root), which is then treated as
@@ -290,6 +367,7 @@ fn revoke_one(devices: &mut [Device], now: u64, rng: &mut Rng) {
         .expect("within limits");
     devices[revoker].created += 1;
     devices[target].revoked_after = Some(cutoff);
+    feed(&mut devices[revoker], &[], true);
 }
 
 /// The adversary injects a forged, tampered or foreign operation into a device.
@@ -342,7 +420,7 @@ fn attack(devices: &mut [Device], attacker: &DeviceKey, now: u64, rng: &mut Rng)
         }
     };
     let t = physical(now, devices[victim].skew_ms);
-    devices[victim].log.apply_batch(vec![forged], t);
+    apply_to(&mut devices[victim], vec![forged], t);
 }
 
 fn holds_forgery(log: &OpLog) -> bool {
@@ -351,6 +429,9 @@ fn holds_forgery(log: &OpLog) -> bool {
         OpKind::DeviceAdded { name, .. } => name == FORGED,
         // Forged deletes carry real item references; `check_marks` catches them.
         OpKind::Rename { name, .. } => name == FORGED,
+        OpKind::NoteCreate { title } => title == FORGED,
+        OpKind::NoteEdit { edit, .. } => edit.inserts.iter().any(|r| r.text == FORGED),
+        OpKind::NoteMeta { title, .. } => title.as_deref() == Some(FORGED),
         OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } | OpKind::Send { .. } => false,
     })
 }
@@ -364,6 +445,85 @@ fn holds_forgery(log: &OpLog) -> bool {
 ///
 /// "Effective" means the author was not revoked, or the operation is within
 /// its cutoff; and the item itself must be effective too.
+/// Notes, after the network heals:
+/// - every honest device holds the same notes, with the same text and the
+///   same authorship of every character;
+/// - with no revocation in the run, nothing is lost: the visible characters
+///   are exactly those inserted minus those deleted, and no edit is left
+///   waiting for a missing character. (A revocation prunes the revoked
+///   device's later characters, and edits anchored to them rightly wait, so
+///   there only convergence is checked.)
+fn check_notes(devices: &[Device]) -> Option<String> {
+    let honest: Vec<&Device> = devices.iter().filter(|d| d.revoked_after.is_none()).collect();
+    let first = &honest[0].log;
+    let notes = first.notes();
+    for d in &honest[1..] {
+        if d.log.notes() != notes {
+            return Some(format!("{} and {} list different notes", d.log.me(), first.me()));
+        }
+    }
+    let revoked = devices.iter().any(|d| d.revoked_after.is_some());
+    for &note in notes.keys() {
+        let doc = first.note_doc(note).expect("listed notes exist");
+        // The daemon's way (edits applied one by one as they arrived, in
+        // whatever order the network delivered them) must give the same
+        // note as rebuilding it from the log.
+        for d in &honest {
+            let canonical = d.log.note_doc(note).expect("listed notes exist");
+            match d.docs.get(&note) {
+                Some(live) if live.text() == canonical.text() && live.spans() == canonical.spans() => {}
+                Some(live) => {
+                    return Some(format!(
+                        "{}'s live copy of note {note:?} differs from its log: {:?} vs {:?}",
+                        d.log.me(),
+                        live.text(),
+                        canonical.text()
+                    ))
+                }
+                None => return Some(format!("{} has no live copy of note {note:?}", d.log.me())),
+            }
+        }
+        for d in &honest[1..] {
+            let other = d.log.note_doc(note).expect("listed notes exist");
+            if other.text() != doc.text() || other.spans() != doc.spans() {
+                return Some(format!("{} and {} disagree about note {note:?}", d.log.me(), first.me()));
+            }
+        }
+        if revoked {
+            continue;
+        }
+        let (mut inserted, mut deleted) = (BTreeSet::new(), BTreeSet::new());
+        for op in first.all_ops() {
+            if let OpKind::NoteEdit { note: n, edit } = &op.kind {
+                if *n != note {
+                    continue;
+                }
+                for run in &edit.inserts {
+                    for k in 0..run.text.chars().count() as u64 {
+                        inserted.insert(tether_core::notes::CharId { counter: run.first + k, device: op.device });
+                    }
+                }
+                for r in &edit.deletes {
+                    for counter in r.from..=r.to {
+                        deleted.insert(tether_core::notes::CharId { counter, device: r.device });
+                    }
+                }
+            }
+        }
+        let expected: BTreeSet<_> = inserted.difference(&deleted).copied().collect();
+        let visible: BTreeSet<_> = doc.chars().into_iter().map(|(id, _)| id).collect();
+        if visible != expected || doc.waiting() != 0 {
+            return Some(format!(
+                "note {note:?} lost or kept characters: {} visible, {} expected, {} edits waiting",
+                visible.len(),
+                expected.len(),
+                doc.waiting()
+            ));
+        }
+    }
+    None
+}
+
 fn check_marks(devices: &[Device], marks: &[Op]) -> Option<String> {
     let effective = |author: DeviceId, seq: u64| {
         devices

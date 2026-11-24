@@ -17,7 +17,7 @@ Tether is a peer-to-peer, end-to-end encrypted desktop app that syncs your clipb
 **Non-goals for v1**
 
 - Mobile apps. iOS restricts background clipboard access; mobile comes last.
-- Real-time co-editing of documents. Tether syncs items and state, not keystrokes inside apps.
+- Real-time co-editing of documents in other apps. Tether syncs items and state, not keystrokes inside other apps. (Changed 2026-11-23: Tether's own Notes, F11 in ROADMAP.md, are co-edited live, by deliberate choice.)
 - Accounts, cloud storage or a web app. Identity is a device keypair, and data lives only on your devices.
 
 ## Problems it solves

@@ -95,7 +95,7 @@ Users can turn any non-core module off from the Modules page (the grid button in
 
 ### Planned modules
 
-`app/src/modules/planned.ts` lists features that are designed but not built. Spaces is on the roadmap (Stage 5). Vault, Drop folders and Remote actions are **proposals**: they are not in DESIGN.md yet and each needs a design pass. Remote actions in particular needs a threat model, since it lets one device trigger behaviour on another.
+`app/src/modules/planned.ts` lists features that are designed but not built, in the order agreed in ROADMAP.md (Notes, Pulse, Compute, Drive, Rules, Timeline, then Vault and Spaces). Each needs its own threat model before it is built. Drop (the shared shelf) grows out of the Transfers module and Handoff out of Workspaces; both are shown under "Coming" inside the app.
 
 ## Data layer
 

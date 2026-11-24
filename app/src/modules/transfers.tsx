@@ -245,6 +245,6 @@ export const transfersModule: TetherModule = {
   group: "Sync",
   summary: "Direct, resumable file transfers. Drag a file onto a device.",
   status: "preview",
-  note: "Roadmap · P3",
+  note: "Becomes Drop · P3",
   view: TransfersView,
 };

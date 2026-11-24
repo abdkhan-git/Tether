@@ -15,6 +15,7 @@ pub mod hlc;
 pub mod identity;
 pub mod limits;
 pub mod log;
+pub mod notes;
 pub mod op;
 pub mod pairing;
 pub mod wire;
@@ -25,5 +26,5 @@ pub use identity::{DeviceId, DeviceKey, Signature};
 pub use log::{
     derive_trust, ApplyResult, BatchOutcome, ItemId, LocalError, Marks, OpLog, Rejection, Trust, VersionVector,
 };
-pub use op::{item_hash, send_is_fresh, ItemRef, Op, OpKind};
+pub use op::{item_hash, send_is_fresh, ItemRef, NoteRef, Op, OpKind};
 pub use wire::{DecodeError, Message};

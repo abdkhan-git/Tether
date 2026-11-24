@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::limits::{op_size, op_within_limits, MAX_OPS_PER_MESSAGE, MAX_PAGE_BYTES, MAX_TEXT_BYTES};
-use crate::op::{item_hash, ItemRef};
+use crate::op::{item_hash, ItemRef, NoteRef};
 use crate::{DeviceId, DeviceKey, Hlc, Op, OpKind, Timestamp};
 
 /// Highest contiguous `seq` held for each device.
@@ -49,6 +49,17 @@ pub type ItemId = (DeviceId, u64);
 ///
 /// Like membership, this is a function of the set of operations held, so
 /// every device that holds the same operations reaches the same marks.
+/// A note's resolved metadata (see [`OpLog::notes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteInfo {
+    pub title: String,
+    pub pinned: bool,
+    pub trashed: bool,
+    pub created: Timestamp,
+    /// The latest edit or metadata change.
+    pub updated: Timestamp,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Marks {
     pub deleted: BTreeSet<ItemId>,
@@ -248,11 +259,23 @@ impl OpLog {
             {
                 return Err(LocalError::NameTooLong)
             }
+            OpKind::NoteCreate { title } | OpKind::NoteMeta { title: Some(title), .. }
+                if title.len() > crate::notes::MAX_TITLE_BYTES =>
+            {
+                return Err(LocalError::NameTooLong)
+            }
             _ => {}
         }
-        let ts = self.hlc.tick(physical_ms);
         let me = self.me();
         let seq = self.ops_from(me).len() as u64 + 1;
+        if let OpKind::NoteEdit { edit, .. } = &kind {
+            // Its character ids must have been made for this seq (see
+            // `next_note_counter`), and it must fit the limits.
+            if !edit.within_limits() || !edit.ids_belong_to(seq) {
+                return Err(LocalError::TooLarge);
+            }
+        }
+        let ts = self.hlc.tick(physical_ms);
         let op = Op::sign(&self.key, seq, ts, kind);
         let membership = op.is_membership();
         self.ops.entry(me).or_default().push(op.clone());
@@ -484,6 +507,108 @@ impl OpLog {
             return None;
         }
         Some(text)
+    }
+
+    /// The first character counter for this device's next operation. Build a
+    /// `NoteEdit` with [`crate::notes::Doc::local_edit`] starting here (and
+    /// continuing for several edits in one batch), then append it before any
+    /// other local operation, so its ids belong to its seq.
+    pub fn next_note_counter(&self) -> u64 {
+        crate::notes::first_counter(self.ops_from(self.me()).len() as u64 + 1).unwrap_or(u64::MAX)
+    }
+
+    /// Every note that exists (its `NoteCreate` is effective), with its
+    /// title, pin and trash state resolved latest-wins per field, and when it
+    /// was created and last changed. A function of the operations held.
+    pub fn notes(&self) -> BTreeMap<NoteRef, NoteInfo> {
+        type Field<T> = Option<((Timestamp, DeviceId, u64), T)>;
+        fn latest<T: Clone>(slot: &mut Field<T>, key: (Timestamp, DeviceId, u64), value: &Option<T>) {
+            match (value, slot.as_ref()) {
+                (None, _) => {}
+                (Some(_), Some((held, _))) if *held >= key => {}
+                (Some(v), _) => *slot = Some((key, v.clone())),
+            }
+        }
+        let mut notes: BTreeMap<NoteRef, NoteInfo> = BTreeMap::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            if let OpKind::NoteCreate { title } = &op.kind {
+                let info =
+                    NoteInfo { title: title.clone(), pinned: false, trashed: false, created: op.ts, updated: op.ts };
+                notes.insert(NoteRef { device: op.device, seq: op.seq }, info);
+            }
+        }
+        type MetaFields = (Field<String>, Field<bool>, Field<bool>);
+        let mut meta: BTreeMap<NoteRef, MetaFields> = BTreeMap::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            let (note, is_meta) = match &op.kind {
+                OpKind::NoteEdit { note, .. } => (*note, false),
+                OpKind::NoteMeta { note, .. } => (*note, true),
+                _ => continue,
+            };
+            let Some(info) = notes.get_mut(&note) else { continue };
+            info.updated = info.updated.max(op.ts);
+            if let (true, OpKind::NoteMeta { title, pinned, trashed, .. }) = (is_meta, &op.kind) {
+                let key = (op.ts, op.device, op.seq);
+                let slots = meta.entry(note).or_default();
+                latest(&mut slots.0, key, title);
+                latest(&mut slots.1, key, pinned);
+                latest(&mut slots.2, key, trashed);
+            }
+        }
+        for (note, (title, pinned, trashed)) in meta {
+            let info = notes.get_mut(&note).expect("meta only for existing notes");
+            if let Some((_, t)) = title {
+                info.title = t;
+            }
+            if let Some((_, p)) = pinned {
+                info.pinned = p;
+            }
+            if let Some((_, t)) = trashed {
+                info.trashed = t;
+            }
+        }
+        notes
+    }
+
+    /// The text of `note`, built from every effective edit held, or `None`
+    /// if the note does not exist. Edits are applied in the log's canonical
+    /// order; the result does not depend on it.
+    pub fn note_doc(&self, note: NoteRef) -> Option<crate::notes::Doc> {
+        let created = self
+            .ops
+            .get(&note.device)
+            .and_then(|ops| ops.get(usize::try_from(note.seq.checked_sub(1)?).ok()?))
+            .is_some_and(|op| matches!(op.kind, OpKind::NoteCreate { .. }) && self.is_effective(op));
+        created.then(|| self.build_note(note))
+    }
+
+    /// Every effective edit held for `note`, applied to an empty document,
+    /// whether or not its `NoteCreate` has arrived yet (edits from one device
+    /// can arrive before the create from another). A cache rebuilt after a
+    /// membership change must use this for every note any edit names, or it
+    /// drops edits that came before their note's create.
+    pub fn build_note(&self, note: NoteRef) -> crate::notes::Doc {
+        let mut doc = crate::notes::Doc::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            if let OpKind::NoteEdit { note: n, edit } = &op.kind {
+                if *n == note {
+                    doc.apply(op.device, edit);
+                }
+            }
+        }
+        doc
+    }
+
+    /// Every note any effective operation names (created or only edited so far).
+    pub fn note_refs(&self) -> BTreeSet<NoteRef> {
+        self.all_ops()
+            .filter(|op| self.is_effective(op))
+            .filter_map(|op| match &op.kind {
+                OpKind::NoteCreate { .. } => Some(NoteRef { device: op.device, seq: op.seq }),
+                OpKind::NoteEdit { note, .. } | OpKind::NoteMeta { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Names given to members by `Rename` operations: for each member, the
@@ -844,6 +969,67 @@ mod tests {
         assert!(send_is_fresh(now + SEND_FUTURE_MS, now));
         assert!(!send_is_fresh(now + SEND_FUTURE_MS + 1, now), "claims to be from the future");
         assert!(!send_is_fresh(u64::MAX, 0));
+    }
+
+    /// Type into `note` on `log` as the daemon does: build the edit at the
+    /// next note counter, then append it.
+    fn type_into(log: &mut OpLog, note: NoteRef, at: usize, delete: usize, text: &str, t: u64) -> Op {
+        let doc = log.note_doc(note).expect("note exists");
+        let edit = doc.local_edit(log.next_note_counter(), at, delete, text).unwrap();
+        log.append_local(OpKind::NoteEdit { note, edit }, t).unwrap()
+    }
+
+    #[test]
+    fn a_note_edited_on_two_devices_converges_with_its_metadata() {
+        let (mut a, mut b) = pair();
+        let create = a.append_local(OpKind::NoteCreate { title: "Ideas".into() }, 4_000).unwrap();
+        let note = NoteRef { device: create.device, seq: create.seq };
+        type_into(&mut a, note, 0, 0, "hello world", 4_100);
+        sync(&a, &mut b);
+        // Apart: A fixes the start, B adds an ending and renames the note.
+        type_into(&mut a, note, 0, 1, "H", 5_000);
+        type_into(&mut b, note, 11, 0, "!", 5_000);
+        b.append_local(
+            OpKind::NoteMeta { note, title: Some("Ideas, sorted".into()), pinned: Some(true), trashed: None },
+            5_100,
+        )
+        .unwrap();
+        a.append_local(
+            OpKind::NoteMeta { note, title: Some("Older title".into()), pinned: None, trashed: None },
+            5_050,
+        )
+        .unwrap();
+        sync(&a, &mut b);
+        sync(&b, &mut a);
+        let (da, db) = (a.note_doc(note).unwrap(), b.note_doc(note).unwrap());
+        assert_eq!(da.text(), "Hello world!");
+        assert_eq!(da.text(), db.text());
+        assert_eq!(a.notes(), b.notes());
+        let info = &a.notes()[&note];
+        assert_eq!((info.title.as_str(), info.pinned, info.trashed), ("Ideas, sorted", true, false));
+        assert!(a.note_doc(NoteRef { device: a.me(), seq: 99 }).is_none());
+    }
+
+    #[test]
+    fn an_edit_whose_ids_do_not_belong_to_its_seq_is_refused() {
+        let (mut a, mut b) = pair();
+        let create = a.append_local(OpKind::NoteCreate { title: "n".into() }, 4_000).unwrap();
+        let note = NoteRef { device: create.device, seq: create.seq };
+        sync(&a, &mut b);
+        // B signs a valid-looking edit, but reuses ids from another seq.
+        let edit = crate::notes::Edit {
+            inserts: vec![crate::notes::Run {
+                first: 1,
+                parent: None,
+                side: crate::notes::Side::Right,
+                text: "x".into(),
+            }],
+            deletes: vec![],
+        };
+        let next = b.ops_from(b.me()).len() as u64 + 1;
+        assert_eq!(b.append_local(OpKind::NoteEdit { note, edit: edit.clone() }, 5_000), Err(LocalError::TooLarge));
+        let forged = Op::sign(&DeviceKey::for_test(2), next, b.clock(), OpKind::NoteEdit { note, edit });
+        assert_eq!(a.apply_remote(forged, 5_001), ApplyResult::Rejected(Rejection::Malformed));
     }
 
     #[test]

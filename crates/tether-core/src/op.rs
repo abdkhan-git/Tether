@@ -40,6 +40,20 @@ pub enum OpKind {
     /// and only while it is fresh (see [`send_is_fresh`]); it changes no
     /// shared state, so every other device just keeps it in the log.
     Send { item: ItemRef, to: DeviceId },
+    /// A new note. Its name is this operation's `(device, seq)`.
+    NoteCreate { title: String },
+    /// Typing in a note: a batch of inserted runs and deleted characters
+    /// (docs/notes-design.md). Character ids belong to this operation's seq.
+    NoteEdit { note: NoteRef, edit: crate::notes::Edit },
+    /// Change a note's title, pin or trash it. Each field: the latest wins.
+    NoteMeta { note: NoteRef, title: Option<String>, pinned: Option<bool>, trashed: Option<bool> },
+}
+
+/// A note, named by the `(device, seq)` of the `NoteCreate` that made it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct NoteRef {
+    pub device: DeviceId,
+    pub seq: u64,
 }
 
 /// How old a `Send` may be when it arrives and still be applied.
