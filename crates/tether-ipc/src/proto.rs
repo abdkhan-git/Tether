@@ -10,7 +10,7 @@ use tether_core::content::HoldReason;
 use tether_core::{DeviceId, Timestamp};
 
 /// Bumped on any change to the messages below; both ends must match.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 6;
 /// Largest request a client may send.
 pub const MAX_REQUEST_BYTES: usize = 16 << 10;
 /// Largest reply or event the daemon sends (one clipboard item can be 1 MiB).
@@ -56,6 +56,24 @@ pub enum Request {
         author: DeviceId,
         seq: u64,
     },
+    /// Put a history item on this device's clipboard (without recording it
+    /// again as a new copy).
+    CopyHere {
+        author: DeviceId,
+        seq: u64,
+    },
+    /// Put a history item on one other device's clipboard (if it arrives
+    /// within two minutes; held items stay held there).
+    Send {
+        author: DeviceId,
+        seq: u64,
+        to: DeviceId,
+    },
+    /// Give a member a display name on every device. The latest rename wins.
+    Rename {
+        device: DeviceId,
+        name: String,
+    },
     /// Turn this connection into a stream of [`Event`]s.
     Subscribe,
 }
@@ -79,6 +97,9 @@ pub enum Reply {
     Paused(bool),
     /// A pin or delete was recorded (and sent to the other devices).
     Marked,
+    Renamed,
+    Sent,
+    Copied,
     Subscribed,
 }
 
@@ -172,6 +193,9 @@ pub enum Event {
     DevicesChanged,
     /// Sync was paused (`true`) or resumed on this device.
     Paused(bool),
+    /// Another device sent this device an item: it was put on the clipboard,
+    /// or held in history if it looks like a command.
+    Received { from: DeviceId, author: DeviceId, seq: u64, held: bool },
     /// An item was pinned, unpinned or deleted, here or on another device.
     /// A deleted item is gone from history: drop it.
     ItemChanged { author: DeviceId, seq: u64, pinned: bool, deleted: bool },

@@ -9,7 +9,8 @@ import { contentOf } from "@/lib/content/detect";
 import { cn } from "@/lib/cn";
 import { AnimatedBeam } from "@/components/magic/animated-beam";
 import { icons } from "@/components/Icon";
-import { Card, DeviceGlyph, EmptyState, Figure, IconButton, Panel, PrimaryAction, SectionLabel, StatusDot, Switch, useColors } from "@/components/ui";
+import { Card, DeviceGlyph, EmptyState, Figure, IconButton, Kbd, Panel, PrimaryAction, SectionLabel, StatusDot, Switch, useColors } from "@/components/ui";
+import { useCopyItem } from "./clipboard/previews";
 import type { TetherModule } from "./types";
 
 /** Where each peer sits around this device, as percentages of the stage. */
@@ -122,9 +123,10 @@ function Stat({ label, value, decimals = 0, suffix, hint }: { label: string; val
 
 /** This device's identity and the pause switch (desktop app only). */
 function ThisDevice() {
-  const { devices, me, paused, setPaused, toast, autostart, backend } = useTether();
+  const { devices, me, paused, setPaused, toast, autostart, notifications, paletteShortcut, backend } = useTether();
   const self = devices.find((d) => d.id === me);
   const setAutostart = (on: boolean) => void backend.setAutostart(on).catch((e) => toast("Could not change the login setting", errorText(e)));
+  const setNotifications = (on: boolean) => void backend.setNotifications(on).catch((e) => toast("Could not change notifications", errorText(e)));
   return (
     <div>
       <SectionLabel>This device</SectionLabel>
@@ -150,13 +152,35 @@ function ThisDevice() {
             <Switch checked={autostart} onChange={setAutostart} label="Open Tether at sign-in" />
           </div>
         )}
+        {paletteShortcut !== null && (
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium">Quick paste</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {paletteShortcut
+                  ? "From any app: search everything you copied on every device, Enter to put it on this clipboard."
+                  : "The shortcut is taken by another app, so quick paste is off for now."}
+              </p>
+            </div>
+            {paletteShortcut && <Kbd>{paletteShortcut}</Kbd>}
+          </div>
+        )}
+        {notifications !== null && (
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium">Notifications</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">When a copy arrives from another device. They name the device, never the copied text.</p>
+            </div>
+            <Switch checked={notifications} onChange={setNotifications} label="Notify me of copies from other devices" />
+          </div>
+        )}
       </Card>
     </div>
   );
 }
 
 function OverviewView() {
-  const { devices, clips, transfers, me, setPairOpen, setActiveModule, toast, backend } = useTether();
+  const { devices, clips, transfers, me, setPairOpen, setActiveModule, backend } = useTether();
   const names = useMemo(() => new Map(devices.map((d) => [d.id, d.name])), [devices]);
   const peers = devices.filter((d) => !d.isMe);
   const online = peers.filter((d) => d.connection !== "offline");
@@ -166,11 +190,7 @@ function OverviewView() {
   const latest = [...clips].filter((c) => !c.sensitive).sort(newestFirst).slice(0, 4);
   const active = transfers.find((t) => t.state === "active") ?? transfers.find((t) => t.state === "paused");
 
-  const copy = (text: string) =>
-    navigator.clipboard.writeText(text).then(
-      () => toast("Copied to this device"),
-      () => toast("Clipboard access was blocked"),
-    );
+  const copyItem = useCopyItem();
 
   return (
     <div className="flex flex-col gap-10">
@@ -217,7 +237,7 @@ function OverviewView() {
                     </p>
                   </div>
                   <div className="opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-within:opacity-100">
-                    <IconButton icon={icons.copy} label="Copy to this device" onClick={() => void copy(c.text)} />
+                    <IconButton icon={icons.copy} label="Copy to this device" onClick={() => copyItem(c)} />
                   </div>
                 </motion.div>
               );

@@ -70,6 +70,7 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
     let s = ctx.lock();
     let me = s.log.me();
     let trust = s.log.trust();
+    let renames = s.log.renames();
     let mut out: Vec<Device> = trust
         .members
         .iter()
@@ -83,8 +84,16 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
             } else {
                 DeviceState::Offline
             };
-            let name =
-                if *id == me { s.name.clone() } else { s.names.get(id).cloned().unwrap_or_else(|| added_as.clone()) };
+            // A rename in the log wins; then the name a device reports for
+            // itself; then the name it was paired under. This device's own
+            // name already follows its renames (`Ctx::refresh_own_name`).
+            let name = if *id == me {
+                s.name.clone()
+            } else if let Some(renamed) = renames.get(id) {
+                crate::ctx::clean_name(renamed)
+            } else {
+                s.names.get(id).cloned().unwrap_or_else(|| crate::ctx::clean_name(added_as))
+            };
             let rtt_us = s.peers.get(id).map(|c| u32::try_from(c.rtt().as_micros()).unwrap_or(u32::MAX));
             Device { id: *id, name, state, rtt_us, ops: s.log.ops_from(*id).len() as u64 }
         })
@@ -155,6 +164,20 @@ pub async fn join(ctx: &Ctx, endpoint: &Endpoint, code: String, addr: Option<Soc
 /// Remove a member from the group and tell the other devices.
 pub fn revoke(ctx: &Ctx, device: DeviceId) -> Result<()> {
     let op = ctx.revoke(device)?;
+    net::broadcast(ctx, op);
+    Ok(())
+}
+
+/// Give a member a display name on every device.
+pub fn rename(ctx: &Ctx, device: DeviceId, name: &str) -> Result<()> {
+    let op = ctx.rename(device, name)?;
+    net::broadcast(ctx, op);
+    Ok(())
+}
+
+/// Put a history item on another device's clipboard.
+pub fn send(ctx: &Ctx, item: ItemId, to: DeviceId) -> Result<()> {
+    let op = ctx.send(item, to)?;
     net::broadcast(ctx, op);
     Ok(())
 }

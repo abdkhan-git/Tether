@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-palette-shortcut"
+description = "Enables the palette_shortcut command without any pre-configured scope."
+commands.allow = ["palette_shortcut"]
+
+[[permission]]
+identifier = "deny-palette-shortcut"
+description = "Denies the palette_shortcut command without any pre-configured scope."
+commands.deny = ["palette_shortcut"]

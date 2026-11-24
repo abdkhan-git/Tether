@@ -107,6 +107,18 @@ async fn handle(ctx: &Ctx, quic: &quinn::Endpoint, request: Request) -> Result<R
             api::set_pinned(ctx, (author, seq), pinned)?;
             Reply::Marked
         }
+        Request::CopyHere { author, seq } => {
+            ctx.copy_here((author, seq))?;
+            Reply::Copied
+        }
+        Request::Send { author, seq, to } => {
+            api::send(ctx, (author, seq), to)?;
+            Reply::Sent
+        }
+        Request::Rename { device, name } => {
+            api::rename(ctx, device, &name)?;
+            Reply::Renamed
+        }
         Request::Delete { author, seq } => {
             api::delete(ctx, (author, seq))?;
             Reply::Marked

@@ -174,6 +174,13 @@ pub enum Event {
         pinned: bool,
         deleted: bool,
     },
+    /// Another device sent this one an item (on the clipboard now, or held).
+    Received {
+        from: String,
+        author: String,
+        seq: u64,
+        held: bool,
+    },
     Lagged,
 }
 
@@ -187,6 +194,9 @@ impl From<ipc::Event> for Event {
             ipc::Event::Paused(paused) => Event::Paused { paused },
             ipc::Event::ItemChanged { author, seq, pinned, deleted } => {
                 Event::ItemChanged { author: author.to_hex(), seq, pinned, deleted }
+            }
+            ipc::Event::Received { from, author, seq, held } => {
+                Event::Received { from: from.to_hex(), author: author.to_hex(), seq, held }
             }
             ipc::Event::Lagged { .. } => Event::Lagged,
         }
@@ -231,6 +241,19 @@ pub fn address(addr: Option<&str>) -> Result<Option<SocketAddr>, String> {
         Some(a) if a.len() > MAX_ADDR_LEN => Err("that address is too long".into()),
         Some(a) => a.parse().map(Some).map_err(|_| "an address looks like 192.168.1.20:5000".into()),
     }
+}
+
+/// A device name from the page: 1 to 64 bytes once trimmed. (The daemon
+/// strips control and direction characters before signing.)
+pub fn device_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a device name cannot be empty".into());
+    }
+    if name.len() > tether_core::limits::MAX_NAME_BYTES {
+        return Err(format!("a device name is at most {} bytes", tether_core::limits::MAX_NAME_BYTES));
+    }
+    Ok(name.to_string())
 }
 
 pub fn history_limit(limit: u16) -> u16 {
@@ -290,6 +313,13 @@ mod tests {
         assert_eq!(ipc::Cursor::from(back), cursor);
         assert!(serde_json::from_str::<Cursor>(r#"{"at":1,"counter":0,"device":"nope"}"#).is_err());
         assert!(serde_json::from_str::<Cursor>(&json.replace('}', r#","extra":1}"#)).is_err());
+    }
+
+    #[test]
+    fn device_names_are_trimmed_and_bounded() {
+        assert_eq!(device_name("  Work laptop ").unwrap(), "Work laptop");
+        assert!(device_name("   ").is_err());
+        assert!(device_name(&"é".repeat(40)).is_err(), "80 bytes is over the limit");
     }
 
     #[test]

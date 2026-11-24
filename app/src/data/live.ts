@@ -75,6 +75,12 @@ function onEvent(e: DaemonEvent) {
     case "itemChanged":
       set({ clips: applyItemChange(s.clips, e) });
       break;
+    case "received":
+      s.toast(
+        `${nameOf(e.from)} sent you an item`,
+        e.held ? "It looks like a command, so it is held in history and not on your clipboard." : "It is on your clipboard, ready to paste.",
+      );
+      break;
     case "lagged":
       void refreshAll();
       break;
@@ -115,6 +121,23 @@ const liveBackend: Backend = {
     if (!item) throw new Error("That item is not in history");
     await daemon.deleteItem(item.author, item.seq);
   },
+  // The daemon answers with devicesChanged, which reloads the list.
+  async renameDevice(id, name) {
+    await daemon.renameDevice(id, name);
+  },
+  async setNotifications(enabled) {
+    set({ notifications: await daemon.setNotifications(enabled) });
+  },
+  async copyHere(clip) {
+    const item = itemOf(clip.id);
+    if (!item) throw new Error("That item is not in history");
+    await daemon.copyHere(item.author, item.seq);
+  },
+  async sendItem(clipId, to) {
+    const item = itemOf(clipId);
+    if (!item) throw new Error("That item is not in history");
+    await daemon.sendItem(item.author, item.seq, to);
+  },
 };
 
 /** Switch the store from preview data to the daemon and follow it. */
@@ -135,6 +158,14 @@ export async function connectDaemon(): Promise<void> {
   daemon.autostart().then(
     (autostart) => set({ autostart }),
     () => set({ autostart: null }),
+  );
+  daemon.notifications().then(
+    (notifications) => set({ notifications }),
+    () => set({ notifications: null }),
+  );
+  daemon.paletteShortcut().then(
+    (shortcut) => set({ paletteShortcut: shortcut ?? "" }),
+    () => set({ paletteShortcut: null }),
   );
   await daemon.onEvent(onEvent);
   await daemon.onLink((link) => {

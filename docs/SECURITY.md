@@ -305,11 +305,12 @@ Mitigations:
   - The window can show only the bundled page: every navigation elsewhere is refused
     (on_navigation, guard::is_app_url), and new windows (window.open, target=_blank) are
     refused. The native file-drop handler is off.
-  - The page's whole API is twelve commands (status, devices, history, pair, join, revoke,
-    set_paused, set_pinned, delete_item, open_link, autostart, set_autostart). build.rs declares them in an app manifest, so Tauri refuses any
-    command the window's capability (capabilities/main.json) does not grant; the capability
-    adds only event listening and setting the window theme, and applies to local content
-    only. No file system, shell, HTTP, clipboard or opener plugin is exposed.
+  - The page's whole API is the app's own commands, listed in build.rs (an app manifest), so
+    Tauri refuses any command a window's capability does not grant. Each window has its own
+    capability (capabilities/main.json, capabilities/palette.json), which adds only event
+    listening and window theme/hide, and applies to local content only. Plugins (notification,
+    global shortcut, single instance) are used from Rust; none of their commands is granted.
+    No file system, shell, HTTP, clipboard or opener plugin is exposed to the page.
   - Every argument is checked in Rust before it reaches the daemon: device ids parse as
     keys, pairing codes are six digits, addresses parse as ip:port (64 bytes at most),
     history pages are clamped, unknown fields in a cursor are refused.
@@ -413,6 +414,137 @@ Residual risk the user should know about: a delete hides the item; its encrypted
   stays in each device's database until compaction (P2) removes it. A delete is final:
   there is no undo. A compromised member can still delete everything it has seen, until
   it is revoked.
+```
+
+### Device names (P2, quick win QW1)
+
+```
+Feature: rename a device on every device (OpKind::Rename; Request::Rename; `tether rename`;
+  the app's rename_device command and the editable name on the Devices page).
+Capability it needs: none new: any active member may name any active member.
+What an attacker gains if it is abused: confusion. A compromised member could swap names
+  ("Desktop" ↔ "Laptop") so the user revokes the wrong device, or put control or
+  direction characters in a name to spoof text in a terminal or the UI.
+Who could abuse it: a compromised paired device; anyone forging operations.
+Mitigations:
+  - Renames are signed operations from members; forged ones are refused (the simulator's
+    adversary forges renames; holds_forgery catches any that stick).
+  - The latest rename wins by (HLC time, device, seq): every device shows the same name.
+  - Names are display only and never used for trust. They are bounded (64 bytes, checked
+    in core, the app and the daemon), and control and direction characters are stripped
+    before a rename is signed and again before any name is shown; the CLI prints them
+    through term::safe and the UI renders them as text.
+  - Fingerprints (the start of each device's key) stay on every device card, and revoke
+    names the device by id, so a misleading name cannot hide which key is affected.
+  - A rename of a device that is not an active member is refused locally and ignored when
+    resolved; a revoked device's later renames are refused like its other operations.
+Limits: 64 bytes per name.
+Test or invariant proving the main property: tether-core
+  log::tests::the_latest_rename_wins_on_every_device_and_strangers_cannot_be_named;
+  tether-sim check_marks (every honest device's names equal an oracle; forged renames are
+  refused); control_e2e::a_rename_reaches_every_device_including_the_renamed_one (control
+  characters stripped, empty names refused); tether-app view::tests (names bounded).
+Residual risk the user should know about: a compromised member can still give devices
+  misleading names until it is revoked; check the fingerprint before revoking.
+```
+
+### Notifications (P2, quick win QW2)
+
+```
+Feature: a native notification when a copy arrives from another device
+  (app/src-tauri/src/notify.rs; the notifications / set_notifications commands; a switch on
+  the Overview's "This device" card).
+Capability it needs: none.
+What an attacker gains if it is abused: clipboard text written to disk in plain text, because
+  OS notification centres store what they show (Windows keeps it in the Action Center
+  database); spoofed or misleading notifications; a flood of notifications.
+Who could abuse it: a compromised paired device choosing text and its own name; a page
+  calling the notification plugin directly.
+Mitigations:
+  - A notification never contains the copied text: it names the device and gives the length
+    (and, for a held item, why it was held).
+  - Device names in notifications are cleaned (no control or direction characters, 40
+    characters at most); a blank name becomes "another device".
+  - None for this device's own copies, while sync is paused, while the window is focused,
+    or when the user turned them off; at most one every 3 seconds.
+  - The notification plugin is used from Rust only; its commands are not granted to the page.
+  - The settings file (whether to notify) is in the user's config folder and holds nothing
+    secret; a missing, oversized or unreadable file means the defaults.
+Limits: one notification per 3 s; settings file read only up to 64 KiB.
+Test or invariant proving the main property: tether-app notify::tests
+  (a_notification_never_carries_the_copied_text, no notification for own copies / paused /
+  focused / off, names cleaned, bursts throttled, settings tolerate junk).
+Residual risk the user should know about: the notification still reveals that a copy
+  happened, when, from which device and how long it was, to anyone who can read the
+  notification history.
+```
+
+### Send to one device (P2, quick win QW3)
+
+```
+Feature: put a history item on one other device's clipboard (OpKind::Send { item, to };
+  Request::Send; the app's send_item command and "Send to <device>" buttons; Event::Received).
+Capability it needs: clipboard.apply on the target, which paired devices already have:
+  every copy from a member is already applied there. A send only picks which item.
+What an attacker gains if it is abused: a compromised member could keep overwriting
+  another device's clipboard, or try to get a command pasted by sending it on purpose;
+  a captured send replayed later could overwrite the clipboard at a bad moment.
+Who could abuse it: a compromised paired device; anyone replaying or forging operations.
+Mitigations:
+  - Sends are signed operations from members; forged ones are refused, and the log applies
+    each (device, seq) once, so a replayed send is a duplicate and does nothing.
+  - Only the named target acts on a send, and only while it is fresh: at most 2 minutes
+    old and at most 30 s in the future by its HLC time (send_is_fresh). A send that
+    arrives late (the target was offline) is not applied.
+  - The item must be held and named by its content hash (as for pins and deletes), and not
+    deleted; the sender cannot send to itself or to a non-member.
+  - The receiving device applies its content policy as for any copy: a command-like or
+    hidden-character item stays held in history, and nothing is applied while paused.
+  - A send changes no shared state (history, pins, names), so it cannot affect convergence.
+Limits: those of any operation; one clipboard write per batch of operations.
+Test or invariant proving the main property: tether-core log::tests
+  (a_send_is_for_its_target_only_and_only_for_a_live_item, sends_are_applied_only_while_fresh);
+  control_e2e::sending_an_item_puts_it_on_that_devices_clipboard_only (applied on the target;
+  a command stays held; nothing while paused; refused to self and for deleted items);
+  tether-app notify::tests (a send's notification never shows the text).
+Residual risk the user should know about: a compromised member can still put items it has
+  seen on your clipboard (as it already could by copying them) until it is revoked.
+```
+
+### Quick paste palette and copy here (P2, quick win QW4)
+
+```
+Feature: a global shortcut (Alt+Shift+V) opens a small always-on-top window to search
+  history and put an item on this device's clipboard (app/src/palette, palette window in
+  main.rs, capabilities/palette.json); Request::CopyHere, which the main window's "Copy to
+  this PC" also uses.
+Capability it needs: none new; a local, explicit user action on this device.
+What an attacker gains if it is abused: the palette sits over other apps and reads all
+  history, so a script running in it could read or change everything; a global shortcut
+  could swallow keys other apps need; writing the clipboard from the page would create a
+  duplicate history item and need clipboard permission in the page.
+Who could abuse it: content from a compromised peer rendered in the palette; another app
+  holding the same shortcut.
+Mitigations:
+  - The palette is its own window with its own, narrower capability: status, devices,
+    history and copy_here, plus hiding itself. It cannot pin, delete, send, rename, pair,
+    revoke or open links. Same CSP and navigation guard as the main window; no new windows.
+  - Item text is rendered as text; sensitive items are masked and their text is never
+    searched.
+  - Copy here goes through the daemon's clipboard thread, which knows its own writes, so the
+    item is not recorded again and the page needs no clipboard permission. Held items can be
+    copied here on purpose (an explicit local action, rule 3); the palette shows "held".
+  - The shortcut is Alt+Shift+V, not Ctrl+Shift+V (used by other apps for "paste as plain
+    text"). If another app holds it, registration fails, the app runs on, and the Overview
+    says quick paste is off.
+  - The palette hides when it loses focus, so it never lingers over other apps.
+Limits: the latest 100 history items are searched; 50 results shown.
+Test or invariant proving the main property: control_e2e::copy_here_puts_an_old_item_back_without_a_duplicate;
+  input::tests (the clipboard thread does not echo its own writes); palette search tests
+  (sensitive text never matched). Checked by hand in a release build through the DevTools
+  protocol: the palette window's capability refuses pin, delete, send and rename.
+Residual risk the user should know about: anyone at the unlocked computer can open the
+  palette and read history, as they could open the main window.
 ```
 
 ## Threat model template (one per feature)

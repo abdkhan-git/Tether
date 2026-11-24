@@ -73,6 +73,8 @@ pub enum Command {
     },
     /// Stop syncing: copies here stay here, and other devices' copies only reach history.
     Pause,
+    /// Give a device a name on every device. ID may be the first characters of its id.
+    Rename { id: String, name: String },
     /// Start syncing again after `tether pause`.
     Resume,
 }
@@ -104,6 +106,7 @@ pub async fn run<W: Write, R: BufRead>(command: Command, target: &Target, out: &
         Command::Revoke { id, yes } => revoke_cmd(target, out, input, &id, yes).await,
         Command::Pause => pause_cmd(target, out, true).await,
         Command::Resume => pause_cmd(target, out, false).await,
+        Command::Rename { id, name } => rename_cmd(target, out, &id, &name).await,
     }
 }
 
@@ -270,6 +273,12 @@ async fn watch_cmd<W: Write>(target: &Target, out: &mut W, count: Option<u32>) -
                 writeln!(out, "an item from {} was deleted", who(&names, &author))?
             }
             Event::ItemChanged { .. } => {}
+            Event::Received { from, held, .. } => writeln!(
+                out,
+                "{} sent this device an item{}",
+                who(&names, &from),
+                if held { "; it is held in history (it looks like a command)" } else { "; it is on the clipboard" }
+            )?,
             Event::Lagged { missed } => writeln!(out, "missed {missed} events; run `tether history` to catch up")?,
         }
         out.flush()?;
@@ -311,6 +320,30 @@ async fn pair_cmd<W: Write>(target: &Target, out: &mut W, no_wait: bool) -> Resu
             bail!("the pairing window closed before a device joined (too many wrong codes?)");
         }
     }
+}
+
+async fn rename_cmd<W: Write>(target: &Target, out: &mut W, id: &str, name: &str) -> Result<()> {
+    let prefix = id.trim().to_ascii_lowercase();
+    if prefix.len() < 4 {
+        bail!("give at least 4 characters of the device id (see `tether devices`)");
+    }
+    let mut c = target.connect().await?;
+    let list = devices(&mut c).await?;
+    let matches: Vec<&Device> = list
+        .iter()
+        .filter(|d| matches!(d.state, DeviceState::ThisDevice | DeviceState::Connected | DeviceState::Offline))
+        .filter(|d| d.id.to_hex().starts_with(&prefix))
+        .collect();
+    let device = match matches.as_slice() {
+        [d] => *d,
+        [] => bail!("no active device in the group starts with {}", safe(&prefix, false)),
+        _ => bail!("{} matches more than one device; give more characters", safe(&prefix, false)),
+    };
+    match c.request(&Request::Rename { device: device.id, name: name.to_string() }).await? {
+        Reply::Renamed => writeln!(out, "Renamed {} to {}.", short(&device.id), preview(name.trim(), 40))?,
+        r => return Err(unexpected(r)),
+    }
+    Ok(())
 }
 
 async fn pause_cmd<W: Write>(target: &Target, out: &mut W, paused: bool) -> Result<()> {
@@ -399,6 +432,10 @@ mod tests {
         assert_eq!(parse(&["history"]).unwrap().command, Command::History { limit: 20, full: false });
         assert_eq!(parse(&["pause"]).unwrap().command, Command::Pause);
         assert_eq!(parse(&["resume"]).unwrap().command, Command::Resume);
+        assert_eq!(
+            parse(&["rename", "abcd", "Work laptop"]).unwrap().command,
+            Command::Rename { id: "abcd".into(), name: "Work laptop".into() }
+        );
         assert_eq!(parse(&["revoke", "abcd", "-y"]).unwrap().command, Command::Revoke { id: "abcd".into(), yes: true });
         assert_eq!(
             parse(&["join", "123456", "192.168.1.20:5000"]).unwrap().command,

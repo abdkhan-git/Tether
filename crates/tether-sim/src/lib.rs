@@ -67,6 +67,10 @@ pub struct Report {
     pub marks: usize,
     /// Of those, deletes.
     pub deletes: usize,
+    /// Items sent to one device.
+    pub sends: usize,
+    /// Device renames.
+    pub renames: usize,
     pub revoked: bool,
     /// `None` when every invariant held.
     pub failure: Option<String>,
@@ -161,6 +165,30 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
                 marks.push(devices[d].log.append_local(kind, t).expect("within limits"));
                 devices[d].created += 1;
                 report.marks += 1;
+            }
+        } else if roll < 42 {
+            // Rename a member (perhaps itself).
+            let d = rng.below(n as u64) as usize;
+            let target = devices[rng.below(n as u64) as usize].log.me();
+            let t = physical(now, devices[d].skew_ms);
+            let op = devices[d]
+                .log
+                .append_local(OpKind::Rename { device: target, name: format!("d{d}-step{step}") }, t)
+                .expect("within limits");
+            marks.push(op);
+            devices[d].created += 1;
+            report.renames += 1;
+        } else if roll < 43 {
+            // Send an item to another device. Sends change no shared state:
+            // the convergence and marks checks prove they leave it alone.
+            let d = rng.below(n as u64) as usize;
+            let to = devices[(d + 1 + rng.below(n as u64 - 1) as usize) % n].log.me();
+            let first = devices[d].log.clipboard_history().first().map(|op| op.id());
+            if let Some(item) = first.and_then(|id| devices[d].log.item_ref(id)) {
+                let t = physical(now, devices[d].skew_ms);
+                devices[d].log.append_local(OpKind::Send { item, to }, t).expect("within limits");
+                devices[d].created += 1;
+                report.sends += 1;
             }
         } else {
             let from = rng.below(n as u64) as usize;
@@ -272,7 +300,13 @@ fn attack(devices: &mut [Device], attacker: &DeviceKey, now: u64, rng: &mut Rng)
     let author_id = devices[author].log.me();
     let next = devices[victim].log.ops_from(author_id).len() as u64 + 1;
     let ts = devices[victim].log.clock();
-    let forged = match rng.below(5) {
+    let forged = match rng.below(6) {
+        // Renames a member, signed by the attacker, claiming to be a member.
+        5 => {
+            let mut op = Op::sign(attacker, next, ts, OpKind::Rename { device: author_id, name: FORGED.into() });
+            op.device = author_id;
+            op
+        }
         // Deletes a real item, signed by the attacker, claiming to be a member.
         // If it stuck, `check_marks` would find the item missing.
         4 => {
@@ -316,7 +350,8 @@ fn holds_forgery(log: &OpLog) -> bool {
         OpKind::ClipboardText(t) => t == FORGED,
         OpKind::DeviceAdded { name, .. } => name == FORGED,
         // Forged deletes carry real item references; `check_marks` catches them.
-        OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } => false,
+        OpKind::Rename { name, .. } => name == FORGED,
+        OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } | OpKind::Send { .. } => false,
     })
 }
 
@@ -338,8 +373,16 @@ fn check_marks(devices: &[Device], marks: &[Op]) -> Option<String> {
     };
     let mut deleted: BTreeSet<ItemId> = BTreeSet::new();
     let mut latest: BTreeMap<ItemId, ((Timestamp, DeviceId, u64), bool)> = BTreeMap::new();
+    let mut names: BTreeMap<DeviceId, ((Timestamp, DeviceId, u64), String)> = BTreeMap::new();
     for op in marks.iter().filter(|op| effective(op.device, op.seq)) {
         match &op.kind {
+            OpKind::Rename { device, name } => {
+                let key = (op.ts, op.device, op.seq);
+                let slot = names.entry(*device).or_insert((key, name.clone()));
+                if key > slot.0 {
+                    *slot = (key, name.clone());
+                }
+            }
             OpKind::Delete { item } if effective(item.device, item.seq) => {
                 deleted.insert((item.device, item.seq));
             }
@@ -368,6 +411,10 @@ fn check_marks(devices: &[Device], marks: &[Op]) -> Option<String> {
         }
         if let Some(op) = d.log.clipboard_history().iter().find(|op| deleted.contains(&op.id())) {
             return Some(format!("{} still shows deleted item {:?}", d.log.me(), op.id()));
+        }
+        let expected: BTreeMap<DeviceId, String> = names.iter().map(|(d, (_, n))| (*d, n.clone())).collect();
+        if d.log.renames() != expected {
+            return Some(format!("{} names devices {:?}, expected {expected:?}", d.log.me(), d.log.renames()));
         }
     }
     None
@@ -452,7 +499,7 @@ mod tests {
     fn many_seeds_converge_under_attack() {
         // The 10,000-seed run is the CLI's job (in CI, in release mode).
         let cfg = Config::default();
-        let (mut attacks, mut revocations, mut deletes, mut marks) = (0, 0, 0, 0);
+        let (mut attacks, mut revocations, mut deletes, mut marks, mut renames) = (0, 0, 0, 0, 0);
         for seed in 0..300 {
             let report = run(seed, &cfg);
             assert!(report.failure.is_none(), "seed {seed} failed: {:?}", report.failure);
@@ -460,9 +507,11 @@ mod tests {
             revocations += report.revoked as usize;
             deletes += report.deletes;
             marks += report.marks;
+            renames += report.renames;
         }
         assert!(attacks > 300 && revocations > 80, "the adversary must actually be exercised");
         assert!(deletes > 1_000 && marks > 3 * deletes / 2, "pins and deletes must actually be exercised");
+        assert!(renames > 1_000, "renames must actually be exercised");
     }
 
     #[test]

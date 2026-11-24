@@ -12,10 +12,16 @@ const COMMANDS: &[&str] = &[
     "revoke",
     "set_paused",
     "set_pinned",
+    "rename_device",
+    "send_item",
+    "copy_here",
+    "palette_shortcut",
     "delete_item",
     "open_link",
     "autostart",
     "set_autostart",
+    "notifications",
+    "set_notifications",
 ];
 
 fn main() {

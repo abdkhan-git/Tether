@@ -14,6 +14,7 @@
 mod guard;
 mod link;
 mod login;
+mod notify;
 mod tray;
 mod view;
 
@@ -32,6 +33,11 @@ use crate::login::DEFAULT_PROFILE;
 const EVENT: &str = "tether://event";
 /// Whether the daemon can be reached, as `view::LinkState`.
 const LINK: &str = "tether://link";
+/// Tells the palette window to start a fresh search.
+const PALETTE_OPEN: &str = "palette://open";
+/// The quick paste shortcut. Not Ctrl+Shift+V: browsers, Office and editors
+/// use that for "paste as plain text", and a global shortcut would take it.
+const PALETTE_SHORTCUT: &str = "Alt+Shift+V";
 
 type Res<T> = Result<T, String>;
 
@@ -91,6 +97,42 @@ async fn revoke(link: State<'_, Arc<Link>>, device: String) -> Res<()> {
     }
 }
 
+/// Put a history item on this device's clipboard (through the daemon, so it
+/// is not recorded again as a new copy).
+#[tauri::command]
+async fn copy_here(link: State<'_, Arc<Link>>, author: String, seq: u64) -> Res<()> {
+    match link.call(Request::CopyHere { author: view::device_id(&author)?, seq }, true).await? {
+        Reply::Copied => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
+/// The quick paste shortcut, if it could be registered (another app may hold it).
+struct PaletteShortcut(std::sync::Mutex<Option<String>>);
+
+#[tauri::command]
+fn palette_shortcut(shortcut: State<'_, PaletteShortcut>) -> Option<String> {
+    shortcut.0.lock().ok().and_then(|s| s.clone())
+}
+
+#[tauri::command]
+async fn send_item(link: State<'_, Arc<Link>>, author: String, seq: u64, to: String) -> Res<()> {
+    let req = Request::Send { author: view::device_id(&author)?, seq, to: view::device_id(&to)? };
+    match link.call(req, false).await? {
+        Reply::Sent => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
+#[tauri::command]
+async fn rename_device(link: State<'_, Arc<Link>>, device: String, name: String) -> Res<()> {
+    let req = Request::Rename { device: view::device_id(&device)?, name: view::device_name(&name)? };
+    match link.call(req, true).await? {
+        Reply::Renamed => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
 #[tauri::command]
 async fn set_pinned(link: State<'_, Arc<Link>>, author: String, seq: u64, pinned: bool) -> Res<()> {
     match link.call(Request::SetPinned { author: view::device_id(&author)?, seq, pinned }, true).await? {
@@ -143,6 +185,77 @@ fn set_autostart(entry: State<'_, LoginEntry>, enabled: bool) -> Res<bool> {
     entry.is_enabled().map_err(|e| format!("could not read the login setting: {e}"))
 }
 
+/// The app's own settings, and the notification throttle.
+struct AppSettings {
+    profile: String,
+    settings: std::sync::Mutex<notify::Settings>,
+    throttle: std::sync::Mutex<notify::Throttle>,
+}
+
+/// Whether a copy from another device shows a notification.
+#[tauri::command]
+fn notifications(app: State<'_, AppSettings>) -> bool {
+    app.settings.lock().map(|s| s.notifications).unwrap_or(true)
+}
+
+#[tauri::command]
+fn set_notifications(app: State<'_, AppSettings>, enabled: bool) -> Res<bool> {
+    let settings = {
+        let mut s = app.settings.lock().map_err(|_| "settings unavailable".to_string())?;
+        s.notifications = enabled;
+        *s
+    };
+    notify::save(&app.profile, &settings)?;
+    Ok(enabled)
+}
+
+/// What a notification is about.
+enum Notice {
+    /// A copy arrived from another device.
+    Copy(tether_ipc::HistoryItem),
+    /// Another device sent this one an item.
+    Send { from: tether_core::DeviceId, held: bool },
+}
+
+/// Show a notification for `notice` if `notify` says so.
+fn notify_event(app: &AppHandle, notice: Notice) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let settings = app.state::<AppSettings>();
+        let enabled = settings.settings.lock().map(|s| s.notifications).unwrap_or(false);
+        if !enabled {
+            return;
+        }
+        let link = app.state::<Arc<Link>>().inner().clone();
+        let Ok(Reply::Status(status)) = link.call(Request::Status, true).await else { return };
+        let sender = match &notice {
+            Notice::Copy(item) => item.author,
+            Notice::Send { from, .. } => *from,
+        };
+        let from = match link.call(Request::Devices, true).await {
+            Ok(Reply::Devices(list)) => list.into_iter().find(|d| d.id == sender).map(|d| d.name),
+            _ => None,
+        }
+        .unwrap_or_default();
+        let window_focused = app
+            .get_webview_window("main")
+            .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false));
+        let cx = notify::Context { enabled, paused: status.paused, window_focused, me: status.device, from: &from };
+        let shown = match &notice {
+            Notice::Copy(item) => notify::for_copy(item, &cx),
+            Notice::Send { from, held } => notify::for_send(*from, *held, &cx),
+        };
+        let Some((title, body)) = shown else { return };
+        if !settings.throttle.lock().map(|mut t| t.allow(std::time::Instant::now())).unwrap_or(false) {
+            return;
+        }
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(e) = app.notification().builder().title(title).body(body).show() {
+            warn!(error = %e, "could not show a notification");
+        }
+    });
+}
+
 // --- Startup ---
 
 /// How this run was started.
@@ -174,16 +287,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Launch, String> 
     }
 }
 
-fn main_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
+/// The rules every Tether window follows: it shows only the bundled page,
+/// opens no new windows, and has no native file drop.
+fn guarded<'a>(
+    builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+) -> WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
     let dev = tauri::is_dev();
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Tether")
-        .visible(!hidden)
-        // A start at sign-in stays in the tray: no focus taken from what the user is doing.
-        .focused(!hidden)
-        .inner_size(1240.0, 820.0)
-        .min_inner_size(900.0, 600.0)
-        .center()
+    builder
         .on_navigation(move |url| {
             let ok = guard::is_app_url(url, dev);
             if !ok {
@@ -197,6 +307,75 @@ fn main_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
             NewWindowResponse::Deny
         })
         .disable_drag_drop_handler()
+}
+
+/// The quick paste palette: a small window over whatever app is in front,
+/// hidden until its shortcut is pressed, hidden again when it loses focus.
+fn palette_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = guarded(WebviewWindowBuilder::new(app, "palette", WebviewUrl::App("index.html".into())))
+        .title("Tether quick paste")
+        .visible(false)
+        .focused(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .inner_size(640.0, 440.0)
+        .center()
+        .build()?;
+    let hide = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(false) => {
+            let _ = hide.hide();
+        }
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = hide.hide();
+        }
+        _ => {}
+    });
+    Ok(())
+}
+
+/// Register the quick paste shortcut. If another app holds it, the app runs
+/// on without it and the page says so (palette_shortcut returns None).
+fn register_palette_shortcut(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let result = app.global_shortcut().on_shortcut(PALETTE_SHORTCUT, |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            open_palette(app);
+        }
+    });
+    match result {
+        Ok(()) => {
+            if let Ok(mut slot) = app.state::<PaletteShortcut>().0.lock() {
+                *slot = Some(PALETTE_SHORTCUT.to_string());
+            }
+            info!(shortcut = PALETTE_SHORTCUT, "quick paste shortcut registered");
+        }
+        Err(e) => warn!(shortcut = PALETTE_SHORTCUT, error = %e, "could not register the quick paste shortcut"),
+    }
+}
+
+/// Show the palette in front, centred, and tell it to start a fresh search.
+fn open_palette(app: &AppHandle) {
+    if let Some(palette) = app.get_webview_window("palette") {
+        let _ = palette.center();
+        let _ = palette.show();
+        let _ = palette.set_focus();
+        let _ = palette.emit_to("palette", PALETTE_OPEN, ());
+    }
+}
+
+fn main_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
+    let window = guarded(WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into())))
+        .title("Tether")
+        .visible(!hidden)
+        // A start at sign-in stays in the tray: no focus taken from what the user is doing.
+        .focused(!hidden)
+        .inner_size(1240.0, 820.0)
+        .min_inner_size(900.0, 600.0)
+        .center()
         .build()?;
     // Closing the window hides it; Tether keeps running in the tray.
     let hide = window.clone();
@@ -230,7 +409,17 @@ fn main() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_window(app)));
     }
     let app = builder
+        // Used from Rust only (notify_event): its commands are not granted to the page.
+        .plugin(tauri_plugin_notification::init())
+        // The palette shortcut, registered in `setup`. Rust side only.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(PaletteShortcut(std::sync::Mutex::new(None)))
         .manage(LoginEntry(login::entry(&profile)))
+        .manage(AppSettings {
+            profile: profile.clone(),
+            settings: std::sync::Mutex::new(notify::load(&profile)),
+            throttle: std::sync::Mutex::new(notify::Throttle::default()),
+        })
         .manage(link.clone())
         .invoke_handler(tauri::generate_handler![
             status,
@@ -241,14 +430,22 @@ fn main() {
             revoke,
             set_paused,
             set_pinned,
+            rename_device,
+            send_item,
             delete_item,
             open_link,
             autostart,
-            set_autostart
+            set_autostart,
+            notifications,
+            set_notifications,
+            copy_here,
+            palette_shortcut
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
             main_window(&handle, hidden)?;
+            palette_window(&handle)?;
+            register_palette_shortcut(&handle);
             let tray = tray::build(&handle)?;
             app.manage(tray);
             info!(%profile, "Tether started");
@@ -258,6 +455,12 @@ fn main() {
                 move |event| {
                     if matches!(event, tether_ipc::Event::Paused(_) | tether_ipc::Event::DevicesChanged) {
                         tray::refresh(&events_to);
+                    }
+                    if let tether_ipc::Event::Received { from, held, .. } = &event {
+                        notify_event(&events_to, Notice::Send { from: *from, held: *held });
+                    }
+                    if let tether_ipc::Event::Clipboard(item) = &event {
+                        notify_event(&events_to, Notice::Copy(item.clone()));
                     }
                     let _ = events_to.emit_to("main", EVENT, view::Event::from(event));
                 },

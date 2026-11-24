@@ -7,11 +7,69 @@ import { timeAgo } from "@/lib/format";
 import { osLabel } from "@/lib/platform";
 import SlideCommit from "@/components/rb/SlideCommit";
 import { Modal } from "@/components/Modal";
-import { icons } from "@/components/Icon";
+import { Icon, icons } from "@/components/Icon";
 import { Card, Chip, ConnectionBadge, DeviceGlyph, EmptyState, IconButton, PageHeader, Panel, PrimaryAction, SectionLabel, useColors } from "@/components/ui";
 import type { TetherModule } from "./types";
 
 const spring = { type: "spring", duration: 0.5, bounce: 0.15 } as const;
+
+/** A device's name, renamed in place: click, type, Enter (Esc cancels). Synced to every device. */
+function DeviceName({ d }: { d: Device }) {
+  const { backend, toast } = useTether();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(d.name);
+
+  const commit = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (!next || next === d.name) {
+      setName(d.name);
+      return;
+    }
+    backend.renameDevice(d.id, next).then(
+      () => toast(`Renamed to ${next}`, "The new name shows on every device."),
+      (e) => {
+        setName(d.name);
+        toast("Could not rename the device", errorText(e));
+      },
+    );
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={name}
+        maxLength={64}
+        aria-label={`New name for ${d.name}`}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setName(d.name);
+            setEditing(false);
+          }
+        }}
+        className="selectable w-full rounded-lg bg-muted px-2 py-0.5 text-[19px] font-medium tracking-tight outline-none"
+      />
+    );
+  }
+  return (
+    <button
+      onClick={() => {
+        setName(d.name);
+        setEditing(true);
+      }}
+      className="group flex max-w-full items-center gap-2 text-left text-[19px] font-medium tracking-tight"
+      aria-label={`Rename ${d.name}`}
+      title={d.name}
+    >
+      <span className="truncate">{d.name}</span>
+      <Icon icon={icons.edit} size={14} className="shrink-0 text-subtle opacity-0 transition-opacity group-hover:opacity-100" />
+    </button>
+  );
+}
 
 function DeviceCard({ d, onRevoke }: { d: Device; onRevoke: (d: Device) => void }) {
   const offline = d.connection === "offline";
@@ -30,9 +88,7 @@ function DeviceCard({ d, onRevoke }: { d: Device; onRevoke: (d: Device) => void 
         </div>
 
         <div className="mt-6">
-          <p className="truncate text-[19px] font-medium tracking-tight" title={d.name}>
-            {d.name}
-          </p>
+          <DeviceName key={d.name} d={d} />
           <p className="mt-1 text-[13px] text-muted-foreground">
             {d.platform ? osLabel[d.platform] : "Paired device"} · {d.seq.toLocaleString()} {d.seq === 1 ? "operation" : "operations"}
           </p>
@@ -148,7 +204,7 @@ export const devicesModule: TetherModule = {
   label: "Devices",
   icon: icons.wifi,
   group: "Network",
-  summary: "Pair and revoke the machines that make up your Tether.",
+  summary: "Pair, rename and revoke the machines that make up your Tether.",
   status: "stable",
   daemon: true,
   core: true,

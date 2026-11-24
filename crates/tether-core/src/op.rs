@@ -33,6 +33,25 @@ pub enum OpKind {
     /// Remove a clipboard item from history on every device. Final: no pin,
     /// earlier or later, brings it back.
     Delete { item: ItemRef },
+    /// Give a member a display name on every device. The latest rename wins
+    /// (by [`Op::order_key`], then `seq`). Names are display only, never trusted.
+    Rename { device: DeviceId, name: String },
+    /// Put a history item on one device's clipboard. Only `to` acts on it,
+    /// and only while it is fresh (see [`send_is_fresh`]); it changes no
+    /// shared state, so every other device just keeps it in the log.
+    Send { item: ItemRef, to: DeviceId },
+}
+
+/// How old a `Send` may be when it arrives and still be applied.
+pub const SEND_FRESH_MS: u64 = 120_000;
+/// How far in the future a `Send` may claim to be (clock skew allowance).
+pub const SEND_FUTURE_MS: u64 = 30_000;
+
+/// Should a `Send` stamped `sent_ms` be applied at local time `now_ms`? A send
+/// that arrives late (the target was offline) is not applied: the item is in
+/// history, and an old request should not overwrite the clipboard hours later.
+pub fn send_is_fresh(sent_ms: u64, now_ms: u64) -> bool {
+    sent_ms <= now_ms.saturating_add(SEND_FUTURE_MS) && now_ms.saturating_sub(sent_ms) <= SEND_FRESH_MS
 }
 
 /// A clipboard item, as a pin or delete names it: the operation that copied

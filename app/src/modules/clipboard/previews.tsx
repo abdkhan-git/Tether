@@ -2,17 +2,36 @@
 // kind of thing should be read, and offers the conversions people reach for.
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { errorText } from "@/data/daemon";
 import { useTether } from "@/data/store";
+import type { Clip } from "@/data/types";
 import type { Content } from "@/lib/content/detect";
 import { formatNumber } from "@/lib/content/detect";
 import { formatCode, type Formatted } from "@/lib/content/format";
 import { highlight, type Language } from "@/lib/content/language";
 import { contrast, joinLines, titleCase, toHex, toHslString, toRgbString, type JwtInfo, type LinkInfo, type PathInfo, type Rgba, type TableInfo, type TextStats, type TimeInfo } from "@/lib/content/parsers";
 import { relativeTime } from "@/lib/format";
-import { os } from "@/lib/platform";
+import { os, thisDevice } from "@/lib/platform";
 import { cn } from "@/lib/cn";
 import { Icon, icons } from "@/components/Icon";
 import { Button, Chip, IconButton, Panel, Segmented } from "@/components/ui";
+
+/**
+ * Put a history item back on this device's clipboard. In the app this goes
+ * through the daemon, so it is not recorded again as a new copy.
+ */
+export function useCopyItem() {
+  const toast = useTether((s) => s.toast);
+  const backend = useTether((s) => s.backend);
+  return useCallback(
+    (clip: Clip) =>
+      void backend.copyHere(clip).then(
+        () => toast(`Copied to ${thisDevice[os]}`),
+        (e) => toast("Could not copy", errorText(e)),
+      ),
+    [backend, toast],
+  );
+}
 
 export function useCopy() {
   const toast = useTether((s) => s.toast);

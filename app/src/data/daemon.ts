@@ -61,6 +61,7 @@ export type DaemonEvent =
   | { type: "devicesChanged" }
   | { type: "paused"; paused: boolean }
   | { type: "itemChanged"; author: string; seq: number; pinned: boolean; deleted: boolean }
+  | { type: "received"; from: string; author: string; seq: number; held: boolean }
   | { type: "lagged" };
 
 export const daemon = {
@@ -73,9 +74,16 @@ export const daemon = {
   setPaused: (paused: boolean) => invoke<boolean>("set_paused", { paused }),
   setPinned: (author: string, seq: number, pinned: boolean) => invoke<void>("set_pinned", { author, seq, pinned }),
   deleteItem: (author: string, seq: number) => invoke<void>("delete_item", { author, seq }),
+  renameDevice: (device: string, name: string) => invoke<void>("rename_device", { device, name }),
+  sendItem: (author: string, seq: number, to: string) => invoke<void>("send_item", { author, seq, to }),
+  copyHere: (author: string, seq: number) => invoke<void>("copy_here", { author, seq }),
+  paletteShortcut: () => invoke<string | null>("palette_shortcut"),
+  onPaletteOpen: (f: () => void): Promise<UnlistenFn> => listen("palette://open", () => f()),
   openLink: (url: string) => invoke<void>("open_link", { url }),
   autostart: () => invoke<boolean>("autostart"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  notifications: () => invoke<boolean>("notifications"),
+  setNotifications: (enabled: boolean) => invoke<boolean>("set_notifications", { enabled }),
   onEvent: (f: (e: DaemonEvent) => void): Promise<UnlistenFn> => listen<DaemonEvent>("tether://event", (e) => f(e.payload)),
   onLink: (f: (s: LinkState) => void): Promise<UnlistenFn> => listen<LinkState>("tether://link", (e) => f(e.payload)),
 };

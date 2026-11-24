@@ -108,9 +108,11 @@ Modules carry `daemon: true` when the daemon implements what they show (Overview
 
 ### The desktop shell (`app/src-tauri`)
 
-- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `set_pinned`, `delete_item`, `open_link`, `autostart`, `set_autostart`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to `capabilities/main.json`; without all three the page cannot call it.
+- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `rename_device`, `set_paused`, `set_pinned`, `delete_item`, `send_item`, `copy_here`, `open_link`, `autostart`, `set_autostart`, `notifications`, `set_notifications`, `palette_shortcut`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to the capability of each window that needs it (`capabilities/main.json`, `capabilities/palette.json`); without all three the page cannot call it.
 - **Rules for the page** (SECURITY.md, "Desktop app"): no remote content, no inline `<style>` or `<script>` (the CSP blocks them), links only through `backend.openLink`, never `window.open` or `<a href>` to outside pages (the window refuses to navigate away from the app).
 - **Window:** closing it hides it to the tray. Tray menu: Open Tether, Pause sync, Quit Tether. Its state always comes from the daemon.
+- **Quick paste palette:** a second window (label `palette`, `app/src/palette/`), hidden until Alt+Shift+V; `main.tsx` mounts the palette instead of the app in that window (or with `?palette` in the browser preview). Its capability grants only status, devices, history and `copy_here`. Copying a history item here (palette, "Copy to this PC", search) goes through the daemon (`copy_here`), so it is not recorded as a new copy; derived text (formatted JSON, a link without trackers) still uses the browser clipboard, because it is new content.
+- **Notifications:** sent from Rust (`notify.rs`) when a copy or a send arrives and the window is not focused. They never contain the copied text. Settings live in `%APPDATA%\Tether\app-<profile>.json`.
 - **Daemon:** if none answers for the profile, the app starts the `tetherd` next to its executable with `--managed`, which stops when the app does. Its log is `%LOCALAPPDATA%\Tether\logs\tetherd-<profile>.log`.
 
 ## Known gaps

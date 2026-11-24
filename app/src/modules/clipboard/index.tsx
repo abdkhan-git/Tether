@@ -11,7 +11,7 @@ import { os, thisDevice } from "@/lib/platform";
 import { Icon, icons, type IconData } from "@/components/Icon";
 import { Button, Card, Chip, DeviceGlyph, EmptyState, IconButton, PageHeader, Panel, PrimaryAction, Segmented } from "@/components/ui";
 import type { TetherModule } from "../types";
-import { Preview, SecretGate, useCopy } from "./previews";
+import { Preview, SecretGate, useCopyItem } from "./previews";
 
 export const kindIcon: Record<ContentKind, IconData> = {
   json: icons.braces,
@@ -75,7 +75,12 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
       () => toast("Removed from every device"),
       (e) => toast("Could not delete", errorText(e)),
     );
-  const copy = useCopy();
+  const sendTo = (to: Device) =>
+    backend.sendItem(clip.id, to.id).then(
+      () => toast(`Sent to ${to.name}`, "It goes on that device's clipboard if it arrives within two minutes."),
+      (e) => toast(`Could not send to ${to.name}`, errorText(e)),
+    );
+  const copyItem = useCopyItem();
   const [revealed, setRevealed] = useState(false);
   const content = contentOf(clip.text);
   const hidden = clip.sensitive && !revealed;
@@ -106,7 +111,7 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
       </AnimatePresence>
 
       <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-5">
-        <PrimaryAction icon={icons.copy} onClick={() => copy(clip.text, `Copied to ${thisDevice[os]}`)}>
+        <PrimaryAction icon={icons.copy} onClick={() => copyItem(clip)}>
           Copy to {thisDevice[os]}
         </PrimaryAction>
         <IconButton icon={clip.pinned ? icons.pinOff : icons.pin} label={clip.pinned ? "Unpin everywhere" : "Pin everywhere"} onClick={() => void setPinned()} />
@@ -120,10 +125,10 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
             }}
           />
         )}
-        {previewOnly && !clip.sensitive && peers.length > 0 && (
+        {!clip.sensitive && peers.length > 0 && (
           <div className="ml-2 flex flex-wrap items-center gap-1.5">
             {peers.map((p) => (
-              <Button key={p.id} variant="ghost" size="sm" icon={icons.send} onClick={() => toast(`Pushed to ${p.name}`)}>
+              <Button key={p.id} variant="ghost" size="sm" icon={icons.send} aria-label={`Send to ${p.name}`} onClick={() => void sendTo(p)}>
                 {p.name}
               </Button>
             ))}
@@ -139,7 +144,7 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
 
 function ClipboardView() {
   const { clips, devices, me, updateClip, backend, historyNext, toast } = useTether();
-  const copy = useCopy();
+  const copyItem = useCopyItem();
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -180,7 +185,7 @@ function ClipboardView() {
     return () => clearTimeout(t);
   }, [clips, updateClip]);
 
-  const copyHere = (c: Clip) => copy(c.text, `Copied to ${thisDevice[os]}`);
+  const copyHere = (c: Clip) => copyItem(c);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!visible.length) return;

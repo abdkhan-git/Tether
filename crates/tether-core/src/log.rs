@@ -243,7 +243,9 @@ impl OpLog {
     pub fn append_local(&mut self, kind: OpKind, physical_ms: u64) -> Result<Op, LocalError> {
         match &kind {
             OpKind::ClipboardText(t) if t.len() > MAX_TEXT_BYTES => return Err(LocalError::TooLarge),
-            OpKind::DeviceAdded { name, .. } if name.len() > crate::limits::MAX_NAME_BYTES => {
+            OpKind::DeviceAdded { name, .. } | OpKind::Rename { name, .. }
+                if name.len() > crate::limits::MAX_NAME_BYTES =>
+            {
                 return Err(LocalError::NameTooLong)
             }
             _ => {}
@@ -452,6 +454,12 @@ impl OpLog {
         }
     }
 
+    /// The text of history item `id`: held, effective and not deleted.
+    pub fn history_text(&self, id: ItemId) -> Option<&str> {
+        let text = self.item_text(id)?;
+        (!self.marks().deleted.contains(&id)).then_some(text)
+    }
+
     /// A reference to item `id` for a new pin or delete, if it is held,
     /// effective and not deleted.
     pub fn item_ref(&self, id: ItemId) -> Option<ItemRef> {
@@ -460,6 +468,43 @@ impl OpLog {
             return None;
         }
         Some(ItemRef { device: id.0, seq: id.1, hash: item_hash(text) })
+    }
+
+    /// For a `Send` addressed to this device: the text it asks to put on the
+    /// clipboard, if the send is from another member, names a held item by
+    /// its correct hash, and that item is not deleted. Whether it is fresh
+    /// enough to apply is the caller's check ([`crate::send_is_fresh`]).
+    pub fn send_for_me(&self, op: &Op) -> Option<&str> {
+        let OpKind::Send { item, to } = &op.kind else { return None };
+        if *to != self.me() || op.device == self.me() || !self.is_effective(op) {
+            return None;
+        }
+        let text = self.item_text((item.device, item.seq))?;
+        if item_hash(text) != item.hash || self.marks().deleted.contains(&(item.device, item.seq)) {
+            return None;
+        }
+        Some(text)
+    }
+
+    /// Names given to members by `Rename` operations: for each member, the
+    /// effective rename with the highest `(order_key, seq)`. Members never
+    /// renamed are absent (the caller falls back to their own or pairing name).
+    /// A function of the operations held, like [`OpLog::marks`].
+    pub fn renames(&self) -> BTreeMap<DeviceId, String> {
+        let mut latest: BTreeMap<DeviceId, ((Timestamp, DeviceId, u64), &str)> = BTreeMap::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            if let OpKind::Rename { device, name } = &op.kind {
+                if !self.trust.members.contains_key(device) {
+                    continue;
+                }
+                let key = (op.ts, op.device, op.seq);
+                let slot = latest.entry(*device).or_insert((key, name));
+                if key > slot.0 {
+                    *slot = (key, name);
+                }
+            }
+        }
+        latest.into_iter().map(|(device, (_, name))| (device, name.to_string())).collect()
     }
 
     /// Resolve every pin and delete held (see [`Marks`]).
@@ -744,6 +789,61 @@ mod tests {
         assert_eq!(copy.id(), (a.me(), 2));
         assert_eq!(ids(&a), vec![copy.id()], "the copy is not hidden");
         assert_eq!(a.marks(), Marks::default());
+    }
+
+    #[test]
+    fn the_latest_rename_wins_on_every_device_and_strangers_cannot_be_named() {
+        let (mut a, mut b) = pair();
+        let rename = |log: &mut OpLog, device: DeviceId, name: &str, t: u64| {
+            log.append_local(OpKind::Rename { device, name: name.into() }, t).unwrap()
+        };
+        let b_id = b.me();
+        let first = rename(&mut a, b_id, "Laptop", 5_000);
+        let second = rename(&mut b, b_id, "Work laptop", 6_000);
+        let stale = rename(&mut a, b_id, "Old name", 5_500); // earlier than B's
+        let stranger = rename(&mut a, DeviceKey::for_test(9).id(), "Not a member", 7_000);
+        a.apply_batch(vec![second.clone()], 8_000);
+        b.apply_batch(vec![stale, first, stranger], 8_000);
+        assert_eq!(a.renames(), b.renames());
+        assert_eq!(a.renames(), BTreeMap::from([(b_id, "Work laptop".to_string())]));
+        assert_eq!(
+            a.append_local(OpKind::Rename { device: b_id, name: "x".repeat(crate::limits::MAX_NAME_BYTES + 1) }, 9_000),
+            Err(LocalError::NameTooLong)
+        );
+    }
+
+    #[test]
+    fn a_send_is_for_its_target_only_and_only_for_a_live_item() {
+        let (mut a, mut b) = pair();
+        let copy = a.append_local(text("for the laptop"), 4_000).unwrap();
+        sync(&a, &mut b);
+        let item = a.item_ref(copy.id()).unwrap();
+        let send = a.append_local(OpKind::Send { item, to: b.me() }, 5_000).unwrap();
+        b.apply_batch(vec![send.clone()], 5_001);
+        assert_eq!(b.send_for_me(&send), Some("for the laptop"));
+        assert_eq!(a.send_for_me(&send), None, "the sender does not act on its own send");
+        assert_eq!(ids(&b), vec![copy.id()], "a send changes no history");
+
+        let wrong = ItemRef { hash: item_hash("something else"), ..item };
+        let forged_target = a.append_local(OpKind::Send { item: wrong, to: b.me() }, 5_100).unwrap();
+        b.apply_batch(vec![forged_target.clone()], 5_101);
+        assert_eq!(b.send_for_me(&forged_target), None, "a wrong hash names nothing");
+
+        let del = delete(&mut a, copy.id(), 6_000);
+        b.apply_batch(vec![del], 6_001);
+        assert_eq!(b.send_for_me(&send), None, "a deleted item is never sent");
+    }
+
+    #[test]
+    fn sends_are_applied_only_while_fresh() {
+        use crate::op::{send_is_fresh, SEND_FRESH_MS, SEND_FUTURE_MS};
+        let now = 1_000_000;
+        assert!(send_is_fresh(now, now));
+        assert!(send_is_fresh(now - SEND_FRESH_MS, now));
+        assert!(!send_is_fresh(now - SEND_FRESH_MS - 1, now), "arrived too late");
+        assert!(send_is_fresh(now + SEND_FUTURE_MS, now));
+        assert!(!send_is_fresh(now + SEND_FUTURE_MS + 1, now), "claims to be from the future");
+        assert!(!send_is_fresh(u64::MAX, 0));
     }
 
     #[test]

@@ -8,7 +8,7 @@ When the owner says "let's continue" (or starts a new session without a specific
 
 ## Work that needs a second device
 
-Some steps can only be done with two real machines, and the owner does not always have the second one (a MacBook) at hand. When the owner says it is available ("I have my MacBook", "let's do the two-machine check"), set the current single-machine work aside at a clean point and do these, in order. Details and checklists are in HANDOFF.md under "Waiting for a second device".
+Some steps can only be done with two real machines. The owner has a Windows desktop and a Windows laptop (no Mac), and the laptop is not always at hand. Everything must still work across Windows, macOS and Linux; the macOS and Linux code is checked by CI builds and, where a desktop is needed, stays listed as unverified. When the owner says the laptop is available ("I have my laptop", "let's do the two-machine check"), set the current single-machine work aside at a clean point and do these, in order. Details and checklists are in HANDOFF.md under "Waiting for a second device".
 
 1. **P1 step 7, the two-machine check:** build the app on both machines, pair them, copy both ways, turn on "Open at sign-in", reboot each machine and record how long sync takes to resume. This is also the first real run of the macOS tray, WKWebView, Keychain and `changeCount` clipboard code. Record hardware, network and method for every number.
 2. **P1 step 8, close out P1** (ROADMAP, SECURITY status table, PROJECT_CONTEXT, README, HANDOFF).

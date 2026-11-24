@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-here"
+description = "Enables the copy_here command without any pre-configured scope."
+commands.allow = ["copy_here"]
+
+[[permission]]
+identifier = "deny-copy-here"
+description = "Denies the copy_here command without any pre-configured scope."
+commands.deny = ["copy_here"]

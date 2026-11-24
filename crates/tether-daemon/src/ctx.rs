@@ -66,7 +66,10 @@ impl PairWindow {
 
 pub struct State {
     pub log: OpLog,
+    /// This device's display name: its latest rename in the log, or `default_name`.
     pub name: String,
+    /// The name given on the command line (`--name`), used until a rename.
+    default_name: String,
     /// Open connections, keyed by the peer's device key (from its certificate).
     pub peers: HashMap<DeviceId, Connection>,
     /// Devices seen on the LAN, trusted or not.
@@ -132,6 +135,7 @@ impl Ctx {
         let state = State {
             log,
             name: clean_name(&name),
+            default_name: clean_name(&name),
             peers: HashMap::new(),
             nearby: HashMap::new(),
             names: HashMap::new(),
@@ -142,6 +146,7 @@ impl Ctx {
         };
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let ctx = Self { state: Arc::new(Mutex::new(state)), gate, tls: Arc::new(tls), clock, deliver, events };
+        Self::refresh_own_name(&mut ctx.lock());
         ctx.refresh_gate();
         ctx
     }
@@ -241,7 +246,7 @@ impl Ctx {
     /// clipboard item according to the delivery policy.
     pub fn apply(&self, ops: Vec<Op>) -> ApplyOutcome {
         let now = self.clock.now_ms();
-        let (out, delivery, changed, new_items, item_changes) = {
+        let (out, delivery, changed, new_items, item_changes, renamed, received) = {
             let mut s = self.lock();
             let before = s.log.version_vector();
             let out = s.log.apply_batch(ops, now);
@@ -305,7 +310,7 @@ impl Ctx {
             // Surface the newest item only if it just arrived from a peer, and
             // never while paused.
             let me = s.log.me();
-            let delivery = s.log.clipboard_history().first().filter(|_| !s.paused).and_then(|op| {
+            let newest = s.log.clipboard_history().first().filter(|_| !s.paused).and_then(|op| {
                 let new = op.seq > before.get(&op.device).copied().unwrap_or(0);
                 match (&op.kind, new && op.device != me) {
                     (OpKind::ClipboardText(text), true) => Some(match content::delivery_for(text) {
@@ -315,11 +320,40 @@ impl Ctx {
                     _ => None,
                 }
             });
+            // A device sent us an item on purpose: that wins over the newest
+            // copy. Only fresh sends, never while paused, and the content
+            // policy still applies (a command stays held).
+            let sent = fresh.iter().rev().filter(|_| !s.paused).find_map(|op| {
+                let text = s.log.send_for_me(op).filter(|_| tether_core::send_is_fresh(op.ts.wall_ms, now))?;
+                let OpKind::Send { item, .. } = &op.kind else { return None };
+                let delivered = match content::delivery_for(text) {
+                    Delivery::Apply => Delivered::Text(text.to_string()),
+                    Delivery::Hold(reason) => Delivered::Held { from: op.device, reason, preview: preview(text) },
+                };
+                let event = Event::Received {
+                    from: op.device,
+                    author: item.device,
+                    seq: item.seq,
+                    held: matches!(delivered, Delivered::Held { .. }),
+                };
+                Some((delivered, event))
+            });
+            let (delivery, received) = match sent {
+                Some((delivered, event)) => (Some(delivered), Some(event)),
+                None => (newest, None),
+            };
             let changed = out.membership_changed;
-            (out, delivery, changed, new_items, item_changes)
+            let renamed = fresh.iter().any(|op| matches!(op.kind, OpKind::Rename { .. })) || changed;
+            if renamed {
+                Self::refresh_own_name(&mut s);
+            }
+            (out, delivery, changed, new_items, item_changes, renamed, received)
         };
         if let Some(d) = delivery {
             (self.deliver)(d);
+        }
+        if let Some(event) = received {
+            self.emit(event);
         }
         for event in item_changes {
             self.emit(event);
@@ -332,9 +366,77 @@ impl Ctx {
             }
         }
         if changed {
-            self.refresh_gate();
+            self.refresh_gate(); // also tells subscribers that devices changed
+        } else if renamed {
+            self.emit(Event::DevicesChanged);
         }
         ApplyOutcome { applied: out.applied, pull_again: out.gap || out.unknown_author > 0 }
+    }
+
+    /// This device's name follows its latest rename in the log, cleaned like
+    /// any name; without one (or if the rename was pruned), the `--name` one.
+    fn refresh_own_name(s: &mut State) {
+        let me = s.log.me();
+        s.name = s.log.renames().get(&me).map(|n| clean_name(n)).unwrap_or_else(|| s.default_name.clone());
+    }
+
+    /// Put history item `item` on this device's clipboard, as the user asked in
+    /// the app or the palette. It goes through the clipboard thread, which
+    /// knows its own writes, so it is not recorded again as a new copy. An
+    /// explicit local action: allowed while paused, and for held items (the
+    /// user chose to use it, SECURITY.md rule 3).
+    pub fn copy_here(&self, item: ItemId) -> Result<()> {
+        let text = self.lock().log.history_text(item).map(str::to_string);
+        let text = text.ok_or_else(|| anyhow!("that item is not in history"))?;
+        (self.deliver)(Delivered::Text(text));
+        Ok(())
+    }
+
+    /// Ask device `to` to put history item `item` on its clipboard. Returns the
+    /// operation to broadcast. `to` must be another active member, and the
+    /// item must be in history (held, from a member, not deleted).
+    pub fn send(&self, item: ItemId, to: DeviceId) -> Result<Op> {
+        let now = self.clock.now_ms();
+        let mut s = self.lock();
+        if s.log.is_revoked() {
+            bail!("this device was removed from its group");
+        }
+        if to == s.log.me() {
+            bail!("that is this device; copy the item here instead");
+        }
+        if !s.log.trust().is_active(to) {
+            bail!("that device is not an active member");
+        }
+        let target = s.log.item_ref(item).ok_or_else(|| anyhow!("that item is not in history"))?;
+        let op = s.log.append_local(OpKind::Send { item: target, to }, now).map_err(|e| anyhow!("{e:?}"))?;
+        Self::persist(&mut s, &op);
+        Ok(op)
+    }
+
+    /// Give a member a display name on every device. Returns the operation to
+    /// broadcast. The name is cleaned (no control or direction characters,
+    /// bounded) before it is signed.
+    pub fn rename(&self, device: DeviceId, name: &str) -> Result<Op> {
+        let name = clean_name(name.trim());
+        if name.is_empty() {
+            bail!("a device name cannot be empty");
+        }
+        let now = self.clock.now_ms();
+        let op = {
+            let mut s = self.lock();
+            if s.log.is_revoked() {
+                bail!("this device was removed from its group");
+            }
+            if !s.log.trust().is_active(device) {
+                bail!("that device is not an active member");
+            }
+            let op = s.log.append_local(OpKind::Rename { device, name }, now).map_err(|e| anyhow!("{e:?}"))?;
+            Self::persist(&mut s, &op);
+            Self::refresh_own_name(&mut s);
+            op
+        };
+        self.emit(Event::DevicesChanged);
+        Ok(op)
     }
 
     /// Recompute who may connect, and close connections to anyone who may not.

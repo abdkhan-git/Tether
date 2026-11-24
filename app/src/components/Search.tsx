@@ -73,9 +73,9 @@ export function Search() {
         section: "Clipboard" as const,
         haystack: c.text.toLowerCase(),
         run: () =>
-          void navigator.clipboard.writeText(c.text).then(
+          void s.backend.copyHere(c).then(
             () => s.toast("Copied to this device"),
-            () => s.toast("Clipboard access was blocked"),
+            () => s.toast("Could not copy"),
           ),
       }));
     return [...pages, ...commands, ...history];

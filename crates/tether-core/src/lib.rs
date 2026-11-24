@@ -25,5 +25,5 @@ pub use identity::{DeviceId, DeviceKey, Signature};
 pub use log::{
     derive_trust, ApplyResult, BatchOutcome, ItemId, LocalError, Marks, OpLog, Rejection, Trust, VersionVector,
 };
-pub use op::{item_hash, ItemRef, Op, OpKind};
+pub use op::{item_hash, send_is_fresh, ItemRef, Op, OpKind};
 pub use wire::{DecodeError, Message};

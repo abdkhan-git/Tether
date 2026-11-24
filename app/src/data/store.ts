@@ -51,6 +51,14 @@ export interface Backend {
   setPinned(clipId: string, pinned: boolean): Promise<void>;
   /** Remove a history item on every device. Final. */
   deleteItem(clipId: string): Promise<void>;
+  /** Give a device a name on every device. */
+  renameDevice(id: string, name: string): Promise<void>;
+  /** Show a notification when a copy arrives from another device. */
+  setNotifications(enabled: boolean): Promise<void>;
+  /** Put a history item on another device's clipboard. */
+  sendItem(clipId: string, to: string): Promise<void>;
+  /** Put a history item on this device's clipboard (not recorded again as a new copy). */
+  copyHere(clip: Clip): Promise<void>;
 }
 
 export interface TetherState {
@@ -66,6 +74,10 @@ export interface TetherState {
   /** UDP port this device's daemon listens on (shown when pairing by address). */
   port: number | null;
   paused: boolean;
+  /** The quick paste shortcut: a string when registered, "" when another app holds it, null where unknown. */
+  paletteShortcut: string | null;
+  /** Notifications for copies from other devices. Null where unknown (browser preview). */
+  notifications: boolean | null;
   /** Tether opens at sign-in. Null where that cannot be known (browser preview). */
   autostart: boolean | null;
   transfers: Transfer[];
@@ -132,6 +144,16 @@ const previewBackend: Backend = {
   async deleteItem(clipId) {
     useTether.getState().deleteClip(clipId);
   },
+  async renameDevice(id, name) {
+    useTether.setState((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) }));
+  },
+  async setNotifications(enabled) {
+    useTether.setState({ notifications: enabled });
+  },
+  async sendItem() {},
+  async copyHere(clip) {
+    await navigator.clipboard.writeText(clip.text);
+  },
 };
 
 export const useTether = create<TetherState>((set, get) => ({
@@ -145,6 +167,8 @@ export const useTether = create<TetherState>((set, get) => ({
   port: null,
   paused: false,
   autostart: null,
+  notifications: null,
+  paletteShortcut: null,
   transfers: mock.transfers,
   workspaces: mock.workspaces,
   ops: mock.ops,

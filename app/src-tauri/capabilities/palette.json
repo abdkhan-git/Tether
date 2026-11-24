@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "palette",
+  "description": "The quick paste palette: read history and device names, put an item on this device's clipboard, hide itself. Nothing that changes shared state (no pin, delete, send, rename, pair or revoke), nothing for remote pages.",
+  "windows": ["palette"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-hide",
+    "core:window:allow-set-theme",
+    "allow-status",
+    "allow-devices",
+    "allow-history",
+    "allow-copy-here"
+  ]
+}
