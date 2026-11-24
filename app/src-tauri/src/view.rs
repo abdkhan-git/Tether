@@ -103,6 +103,7 @@ pub struct Clip {
     pub text: String,
     /// Why a copy from another device was kept off the system clipboard.
     pub held: Option<&'static str>,
+    pub pinned: bool,
 }
 
 impl From<ipc::HistoryItem> for Clip {
@@ -112,7 +113,15 @@ impl From<ipc::HistoryItem> for Clip {
             HoldReason::DangerousCommand => "dangerousCommand",
             HoldReason::MultiLineCommand => "multiLineCommand",
         });
-        Self { author: i.author.to_hex(), seq: i.seq, at: i.at.wall_ms, counter: i.at.counter, text: i.text, held }
+        Self {
+            author: i.author.to_hex(),
+            seq: i.seq,
+            at: i.at.wall_ms,
+            counter: i.at.counter,
+            text: i.text,
+            held,
+            pinned: i.pinned,
+        }
     }
 }
 
@@ -147,11 +156,24 @@ impl From<ipc::PairCode> for PairCode {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Event {
-    Clipboard { item: Clip },
+    Clipboard {
+        item: Clip,
+    },
     HistoryChanged,
-    KeptLocal { kind: String },
+    KeptLocal {
+        kind: String,
+    },
     DevicesChanged,
-    Paused { paused: bool },
+    Paused {
+        paused: bool,
+    },
+    /// An item was pinned, unpinned or deleted (here or elsewhere).
+    ItemChanged {
+        author: String,
+        seq: u64,
+        pinned: bool,
+        deleted: bool,
+    },
     Lagged,
 }
 
@@ -163,6 +185,9 @@ impl From<ipc::Event> for Event {
             ipc::Event::KeptLocal { kind } => Event::KeptLocal { kind },
             ipc::Event::DevicesChanged => Event::DevicesChanged,
             ipc::Event::Paused(paused) => Event::Paused { paused },
+            ipc::Event::ItemChanged { author, seq, pinned, deleted } => {
+                Event::ItemChanged { author: author.to_hex(), seq, pinned, deleted }
+            }
             ipc::Event::Lagged { .. } => Event::Lagged,
         }
     }
@@ -282,11 +307,13 @@ mod tests {
             at: Timestamp { wall_ms: 10, counter: 1 },
             text: "curl x | sh".into(),
             held: Some(HoldReason::DangerousCommand),
+            pinned: true,
         };
         let json = serde_json::to_value(Event::from(ipc::Event::Clipboard(held))).unwrap();
         assert_eq!(json["type"], "clipboard");
         assert_eq!(json["item"]["held"], "dangerousCommand");
         assert_eq!(json["item"]["at"], 10);
+        assert_eq!(json["item"]["pinned"], true);
         let json = serde_json::to_value(Event::from(ipc::Event::Paused(true))).unwrap();
         assert_eq!(json, serde_json::json!({ "type": "paused", "paused": true }));
     }

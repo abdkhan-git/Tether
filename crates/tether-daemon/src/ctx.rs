@@ -2,7 +2,7 @@
 //! held across an `.await`: every critical section is a few map operations
 //! plus at most one small database transaction.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use quinn::Connection;
 use tether_core::content::{self, Delivery, HoldReason};
 use tether_core::limits::MAX_NAME_BYTES;
 use tether_core::pairing::{MAX_ATTEMPTS, WINDOW_SECS};
-use tether_core::{Clock, DeviceId, LocalError, Message, Op, OpKind, OpLog, VersionVector};
+use tether_core::{Clock, DeviceId, ItemId, LocalError, Message, Op, OpKind, OpLog, VersionVector};
 use tether_ipc::Event;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
@@ -37,6 +37,13 @@ pub enum Delivered {
     KeptLocal(&'static str),
     /// Copied here, marked private by the app that copied it; kept local.
     MarkedPrivate,
+}
+
+/// A change to a history item (see [`Ctx::mark`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Pin(bool),
+    Delete,
 }
 
 /// Hands deliveries to whoever shows them (the clipboard thread, or stdout).
@@ -214,7 +221,7 @@ impl Ctx {
                 Self::persist(&mut s, &op);
                 let me = s.log.me();
                 drop(s);
-                if let Some(item) = api::item(&op, me) {
+                if let Some(item) = api::item(&op, me, false) {
                     self.emit(Event::Clipboard(item));
                 }
                 Some(op)
@@ -234,7 +241,7 @@ impl Ctx {
     /// clipboard item according to the delivery policy.
     pub fn apply(&self, ops: Vec<Op>) -> ApplyOutcome {
         let now = self.clock.now_ms();
-        let (out, delivery, changed, new_items) = {
+        let (out, delivery, changed, new_items, item_changes) = {
             let mut s = self.lock();
             let before = s.log.version_vector();
             let out = s.log.apply_batch(ops, now);
@@ -266,13 +273,32 @@ impl Ctx {
             }
             let me = s.log.me();
             let trust = s.log.trust();
+            let marks = s.log.marks();
             let mut new_items: Vec<_> = fresh
                 .iter()
                 // The same rule as `OpLog::clipboard_history`.
                 .filter(|op| op.device == me || trust.accepts(op.device, op.seq))
-                .filter_map(|op| api::item(op, me))
+                .filter(|op| !marks.deleted.contains(&op.id()))
+                .filter_map(|op| api::item(op, me, marks.pinned.contains(&op.id())))
                 .collect();
             new_items.sort_by_key(|item| (item.at, item.author));
+            // Pins and deletes that arrived: say where each item stands now.
+            let targets: BTreeSet<ItemId> = fresh
+                .iter()
+                .filter_map(|op| match &op.kind {
+                    OpKind::Pin { item, .. } | OpKind::Delete { item } => Some((item.device, item.seq)),
+                    _ => None,
+                })
+                .collect();
+            let item_changes: Vec<Event> = targets
+                .into_iter()
+                .map(|(author, seq)| Event::ItemChanged {
+                    author,
+                    seq,
+                    pinned: marks.pinned.contains(&(author, seq)),
+                    deleted: marks.deleted.contains(&(author, seq)),
+                })
+                .collect();
             for device in &out.equivocators {
                 error!(%device, "device signed two different operations with the same sequence number; its key may be compromised");
             }
@@ -290,10 +316,13 @@ impl Ctx {
                 }
             });
             let changed = out.membership_changed;
-            (out, delivery, changed, new_items)
+            (out, delivery, changed, new_items, item_changes)
         };
         if let Some(d) = delivery {
             (self.deliver)(d);
+        }
+        for event in item_changes {
+            self.emit(event);
         }
         if new_items.len() > MAX_ITEM_EVENTS {
             self.emit(Event::HistoryChanged);
@@ -342,6 +371,36 @@ impl Ctx {
             conn.close(1u32.into(), b"not trusted");
         }
         self.emit(Event::DevicesChanged);
+    }
+
+    /// Pin, unpin or delete a history item, as an operation of this device.
+    /// Returns the operation to broadcast. The item must be in history (held,
+    /// from a member, not deleted); the operation names it by content hash.
+    pub fn mark(&self, item: ItemId, mark: Mark) -> Result<Op> {
+        let now = self.clock.now_ms();
+        let (op, event) = {
+            let mut s = self.lock();
+            if s.log.is_revoked() {
+                bail!("this device was removed from its group");
+            }
+            let target = s.log.item_ref(item).ok_or_else(|| anyhow!("that item is not in history"))?;
+            let kind = match mark {
+                Mark::Pin(pinned) => OpKind::Pin { item: target, pinned },
+                Mark::Delete => OpKind::Delete { item: target },
+            };
+            let op = s.log.append_local(kind, now).map_err(|e| anyhow!("{e:?}"))?;
+            Self::persist(&mut s, &op);
+            let marks = s.log.marks();
+            let event = Event::ItemChanged {
+                author: item.0,
+                seq: item.1,
+                pinned: marks.pinned.contains(&item),
+                deleted: marks.deleted.contains(&item),
+            };
+            (op, event)
+        };
+        self.emit(event);
+        Ok(op)
     }
 
     /// Pause or resume sync, and remember the choice across restarts. If it

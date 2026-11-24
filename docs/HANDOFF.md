@@ -24,11 +24,13 @@ Keep this file short and factual. Every claim here should be something the code 
 
 ## Current state (2026-11-23)
 
-**P0, the security foundation, is done** (`674113e`). **P1 is in progress:** steps 1 to 5 are committed (encrypted storage `9f6de96`, control channel `2cc9f81`, CLI `8c725bb`, clipboard events `5a2b601`, reconnect `21585a1`); step 6, the Tauri shell and tray, is done (not yet committed when this was written).
+**P0, the security foundation, is done** (`674113e`). **P1:** steps 1 to 6 are committed (encrypted storage `9f6de96`, control channel `2cc9f81`, CLI `8c725bb`, clipboard events `5a2b601`, reconnect `21585a1`, Tauri shell and tray `6209553`). Steps 7 and 8 need a second machine (see "Waiting for a second device"). **Since `6209553`, not yet committed when this was written:** "Open at sign-in" (the last P1 follow-up that step 7 needs) and **P2.1, pins and deletes on every device**.
 
 Verified on Windows:
 
-- **Rust tests:** `cargo test --workspace` passes all 118: 7 `tether-app`, 6 `tether-cli`, 43 core (9 for backoff), 23 daemon unit (10 store, 7 clipboard logic, 1 privacy mark, 2 pause and log), 4 CLI end-to-end, 8 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 11 `tether-os` and 2 simulator. 4 more are `#[ignore]`d because they use the real clipboard or credential store; all 4 pass when run by hand (see below).
+- **Rust tests:** `cargo test --workspace` passes all 129: 12 `tether-app`, 6 `tether-cli`, 48 core (9 for backoff, 5 for pins and deletes), 23 daemon unit (10 store, 7 clipboard logic, 1 privacy mark, 2 pause and log), 4 CLI end-to-end, 9 control-channel end-to-end, 4 security end-to-end, 10 `tether-ipc`, 11 `tether-os` and 2 simulator. 4 more are `#[ignore]`d because they use the real clipboard or credential store; all 4 pass when run by hand (see below).
+- **Simulator with pins and deletes (P2.1):** `cargo run --release -p tether-sim -- --seeds 10000`: 0 failures; 1.70M ops, 294,579 pins/unpins/deletes (98,223 deletes), 199,718 network faults, 150,346 attacks (now including forged deletes of real items), 3,923 revocations; 200 s on 12 threads. `check_marks` compares every honest device with an oracle rebuilt from what the devices did. Mutation checks: making the oldest pin win fails 179 of 300 seeds; letting a pin outrank a delete fails 141 of 300.
+- **Pins, deletes and open at sign-in in the app, checked by hand** (release build, DevTools protocol, ephemeral daemons): clicking "Pin everywhere" and "Delete everywhere" in the page reaches the daemon and updates the page; a deleted item cannot be pinned again (39 checks in all, with the P1.6 ones). The sign-in switch writes `"…\tether-app.exe" --hidden --profile X` (path quoted) to `HKCU\…\Run`, reads back, and removes it; a `--hidden` launch keeps the Tauri window invisible and still reaches the daemon; the plugin commands are refused (11 checks). Test profiles, credentials, logs and Run entries removed afterwards.
 - **Desktop app (P1.6), checked by hand through the WebView2 DevTools protocol** against a release build (`npx tauri build --no-bundle`), with two ephemeral `--stdin` daemons so neither the clipboard nor the credential store was touched: the page loads with no CSP violations or errors; live status, devices (QUIC RTT 0.5 ms on loopback), pairing through the app's `pair` command, a copy from the peer, a held command, pause (nothing applied, still in history, banner shown), and revoke all work; five commands outside the allow-list are refused by Tauri's ACL; bad ids, codes, addresses and cursors are refused in Rust; `open_link` refuses file:, UNC, ms-msdt:, javascript: and credentialed links; navigating to a remote page and `window.open` are refused. The CSP is enforced, not just quiet: injected inline style and script, inline handlers, string eval from page code, remote fetch, images and iframes each raise a violation report. With a throwaway profile and no token, the app started its own `tetherd --managed`; killing the app made that daemon log "the app that started this daemon has gone", shut down, and remove its control token from Credential Manager. Profile, keys and logs deleted afterwards. `npx tauri dev -- -- --profile X` was checked the same way. The scripts were throwaway (scratchpad); there are no UI tests in CI.
 - **Mutation checks (P1.6):** removing the paused check in `Ctx::local_copy` makes `control_e2e::a_paused_device_sends_nothing_and_applies_nothing_until_resumed` fail; removing it from `Ctx::apply` makes `ctx::tests::while_paused_…` fail.
 - **Reconnect (run by hand):** `cargo test -p tether-daemon --test reconnect_e2e -- --ignored --nocapture`. Two persistent daemons, A hard-killed: after a 6 s outage B reconnects 0.9 s after A is back (stateless reset); after a 25 s outage, 2.8 s (backoff: 932 ms, then 1,829 ms). History survives the kill. The test deletes its profiles, even when it fails. Without the derived connection-ID key the quick case takes 14 s and the test fails.
@@ -76,13 +78,15 @@ Not verified yet:
 | End-to-end tests | `crates/tether-daemon/tests/security_e2e.rs`, `control_e2e.rs`, `cli_e2e.rs` (CLI run in-process against real daemons), shared harness in `tests/common/mod.rs` (`Daemon::with_control` passes a token through `TETHER_CONTROL_TOKEN`) |
 | Simulator | `crates/tether-sim/src/lib.rs` (attacks, revocation, invariants), `main.rs` (parallel seeds) |
 | Pause | `tether_ipc::Request::SetPaused`, `Status.paused`, `Event::Paused`; `crates/tether-daemon/src/ctx.rs` (`set_paused`, gates in `local_copy` and `apply`), `store.rs` (sealed `paused` flag in `meta`, unreadable means paused); CLI `tether pause` / `resume`; console `/pause` / `/resume` |
+| Pins and deletes | `crates/tether-core/src/op.rs` (`OpKind::Pin`, `OpKind::Delete`, `ItemRef`, `item_hash`), `log.rs` (`Marks`, `OpLog::marks`, `item_ref`; `clipboard_history` skips deleted), `crates/tether-sim/src/lib.rs` (`check_marks` oracle, forged-delete attack); daemon `ctx.rs` (`Ctx::mark`, `Event::ItemChanged` in `apply`), `api.rs` (`set_pinned`, `delete`); app commands `set_pinned`, `delete_item` |
+| Open at sign-in | `app/src-tauri/src/login.rs` (quoted login entry via `auto-launch`), commands `autostart` / `set_autostart` in `main.rs`, `--hidden` start |
 | Desktop app (Tauri) | `app/src-tauri/src/main.rs` (the eight commands, window with navigation guard, setup), `link.rs` (connect or start `tetherd --managed`, request retry, event pump, shutdown, daemon log path), `guard.rs` (`is_app_url`, `external_link`), `view.rs` (JSON shapes and input checks), `tray.rs`; `build.rs` (command allow-list), `capabilities/main.json`, `tauri.conf.json` (CSP), `tauri.bundle.json` + `app/scripts/stage-tetherd.mjs` (installer) |
 | UI | `app/src/modules/*`, `app/src/lib/content/*`; data: `app/src/data/store.ts` (`Backend`), `live.ts` (daemon), `daemon.ts` (typed commands and events), `map.ts` (+ tests), `mock.ts` (browser preview only) |
 | CI and supply chain | `.github/workflows/ci.yml`, `deny.toml` |
 
 ---
 
-## Next up: P1, the real app
+## P1, the real app
 
 **Goal** (from [ROADMAP.md](ROADMAP.md)): copy on the PC, see it in the Tether window on the MacBook. The two devices are paired and the connection is encrypted, and this still works after either one reboots.
 
@@ -107,7 +111,7 @@ The steps below are in order, because each depends on the ones before it.
   - `tether_core::backoff::Redial`: new targets are due at once; failures wait uniform in [ceiling/2, ceiling], where the ceiling doubles from 1 s and is capped at 30 s; a session of at least 30 s resets the backoff (redialled at once), a shorter one counts as a failure; never two dials in flight per target. Tested without sleeping (unit and property tests).
   - The daemon loop wakes when a dial is due or on any `Event::DevicesChanged`, with a 30 s safety re-check. `--peer` addresses use the same schedule. The `dialing` set in `ctx` is gone.
   - Found while testing: a hard-killed peer went unnoticed for 30 s (the old idle timeout), and a restarted peer could not reset the stale connection, because quinn's reset key and connection-ID key were random per process. Both keys are now derived from the device key; the idle timeout is 15 s.
-- [x] **6. Tauri shell and tray.** Done 2026-11-23. Threat model in SECURITY.md ("Desktop app").
+- [x] **6. Tauri shell and tray.** Done 2026-11-23, committed `6209553`. Threat model in SECURITY.md ("Desktop app").
   - `app/src-tauri` (crate `tether-app`, Tauri 2.12, in the workspace). Thin client of the control channel; holds no keys, no history, no sockets.
   - The page's whole API is eight commands (`status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `open_link`), declared in `build.rs` so Tauri refuses anything `capabilities/main.json` does not grant. Every argument is checked in Rust.
   - CSP `default-src 'none'`, scripts and styles `'self'` only (the inline `<style>` in two vendored components moved to `index.css`), `connect-src ipc:` only, frozen prototype. The window refuses navigation away from the bundled page and new windows; links open only through `open_link` (http, https, mailto).
@@ -115,15 +119,37 @@ The steps below are in order, because each depends on the ones before it.
   - Added beyond the original plan, because the tray needed it: **pause**, end to end (protocol v2 `SetPaused`, sealed and persisted, fail closed, `tether pause`/`resume`, console `/pause`/`/resume`). Also per-device QUIC RTT and op counts in `Devices`, shown in the UI.
   - Live data in Overview, Clipboard (paging, held items explained, "Held" filter), Devices (nearby list, real revoke, fingerprints), Diagnostics (real RTT, this device's version vector, clipboard ops), pairing (show a code and wait for the newcomer; enter a code with an optional address). Transfers and Workspaces are listed as coming inside the app. Rename, pin, delete and "keep local" are hidden in the app until the daemon supports them.
   - Tray: Open Tether, Pause sync (checked from the daemon's state), Quit Tether; tooltip shows connected devices. Closing the window hides it. Single instance for the default profile.
-  - Follow-ups: start at login (needed for step 7 without a manual launch); "Show in File Explorer" for local paths only (refuse UNC); peers' OS and version vectors in the protocol; vitest 5 (dev-only advisories); UI tests in CI.
-- [ ] **7. Two-machine check.** Pair two real machines. Copy text and check it arrives. Reboot each machine and check sync resumes. Record what was measured.
-  - Build the app on each machine (`cd app; npm install; npm run app:build`, or `npm run app` for a dev build). On the Mac this also gives the first run of the tray, WKWebView and Keychain code.
-  - Nothing starts Tether at login yet: either relaunch the app after each reboot (and say so in the record) or add start at login first (`tauri-plugin-autostart`, off by default, a switch in the UI).
-- [ ] **8. Close out P1.**
+  - Follow-ups: "Show in File Explorer" for local paths only (refuse UNC); peers' OS and version vectors in the protocol; vitest 5 (dev-only advisories); UI tests in CI.
+- [x] **6b. Open at sign-in.** Done 2026-11-23 (uncommitted). Threat model in SECURITY.md ("Open at sign-in").
+  - A switch on the Overview's "This device" card, off by default; commands `autostart` / `set_autostart`. The entry runs `tether-app --hidden [--profile X]`, one per profile, and starts in the tray.
+  - Uses `auto-launch` directly (`app/src-tauri/src/login.rs`), not `tauri-plugin-autostart`: both write the path unquoted, which on Windows is CWE-428 for paths with spaces. We quote it (Windows, Linux desktop entry; Linux refuses paths it cannot quote safely).
+
+## Waiting for a second device
+
+These need two real machines (the owner's MacBook). Do them, in order, whenever the owner says the second device is available (CLAUDE.md, "Work that needs a second device"), then return to "Next up".
+
+- [ ] **P1 step 7: two-machine check.** Pair two real machines. Copy text both ways and check it arrives. Turn on "Open at sign-in" on both, reboot each, and check sync resumes on its own. Record what was measured (time from sign-in to connected, copy-to-paste latency), with hardware, OS versions and network.
+  - Build on each machine: `cd app; npm install; npm run app:build` (installer, `tetherd` staged beside the app) or `npm run app` (dev build). On the Mac this is the first real run of the tray, WKWebView, Keychain, launch agent and `changeCount` clipboard code: check each, and note anything that differs from Windows.
+  - Also check across machines: pin on one, see it pinned on the other; delete on one, see it disappear on the other; pause on one.
+  - If mDNS discovery fails between them, pair with the address shown in the pairing dialog (IP and port).
+- [ ] **P1 step 8: close out P1.**
   - Update ROADMAP.md (mark P1 done), SECURITY.md (status table; the residual risk "history is plain text" is closed), PROJECT_CONTEXT.md (build status), README and this file.
   - Give the owner the git commands.
+- [ ] **P2: published latency.** p50/p99 copy-to-paste latency between the two machines, measured over many copies, with method and hardware, for the README.
 
-**After P1:** P2, core correctness. That covers merge rules for pins and deletes, compaction, content detection moved into Rust, simulator faults for crashes and clock skew, and published p50/p99 latency measured on two real machines.
+## Next up (one machine): P2, core correctness
+
+From ROADMAP.md: merge rules for pins, deletes and settings; compaction; content detection and sensitivity in Rust; simulator faults for crashes, clock skew and revocation mid-sync. Done when 10,000 seeds pass with the new invariants (and the latency above is published).
+
+- [x] **P2.1 Pins and deletes.** Done 2026-11-23 (uncommitted). Threat model in SECURITY.md ("Pins and deletes").
+  - `OpKind::Pin { item, pinned }` and `OpKind::Delete { item }` in `tether-core`; `ItemRef` names an item by `(device, seq)` and a BLAKE3 hash of its text, so a pin or delete cannot target a copy its author never saw. `OpLog::marks()` resolves them from the operations held: delete wins (tombstone); pins are last-writer-wins by (HLC time, device, seq). `clipboard_history()` leaves deleted items out.
+  - Simulator: devices pin, unpin and delete; the adversary forges deletes; `check_marks` compares every honest device with an oracle.
+  - Control protocol v3: `SetPinned`, `Delete`, `HistoryItem.pinned`, `Event::ItemChanged`. App commands `set_pinned`, `delete_item`. The Clipboard page's pin and "Delete everywhere" buttons work in the app; Pinned filter.
+  - Follow-ups: `tether pin` / `tether delete` in the CLI (needs item ids in `tether history`); compaction to remove a deleted item's encrypted operation (P2.2); a confirm step or undo window before "Delete everywhere" (deletes are final).
+- [ ] **P2.2 Compaction.** The log only grows, and a deleted item's encrypted operation stays in every database. Design how a device drops operations everyone has seen (a stable version vector across members) without breaking `missing_for` paging, re-verification on load, or a device that comes back after a long time offline. Redacting deleted text is the user-visible win. Needs a threat model and simulator invariants (convergence after compaction; a late device still catches up or is told to re-pair).
+- [ ] **P2.3 Settings merge: device names.** Rename a device everywhere (`OpKind::Rename`, last-writer-wins like pins); bring back the rename field on the Devices page.
+- [ ] **P2.4 Content detection in Rust.** Move the sensitivity rules the UI uses (`app/src/lib/content/detect.ts`) into `tether-core::content`, so the daemon, CLI and app agree on what is a secret.
+- [ ] **P2.5 Simulator faults.** A device that crashes and restarts from its store (losing unsynced in-memory state), larger clock skew and jumps, and revocation in the middle of a sync page.
 
 ---
 
@@ -132,7 +158,9 @@ The steps below are in order, because each depends on the ones before it.
 | Decision | Options | Recommendation |
 | --- | --- | --- |
 | How the UI reaches the daemon | **Decided for P1 (2026-11-23):** a managed sidecar. The app uses a running daemon, or starts `tetherd --managed` beside it, which stops with the app. A per-user startup service remains the option for later. | Revisit with start at login |
-| Start at login | Off by default with a switch in the app · on by default | Off by default, a switch on the Overview's "This device" card |
+| Start at login | **Decided (2026-11-23):** off by default, a switch on the Overview's "This device" card. | Done |
+| Undo for "Delete everywhere" | Final, as now (delete wins) · a short undo window before the delete is sent · a "Recently deleted" view until compaction | An undo window before sending: it keeps delete-wins simple and protects against slips |
+| Compaction (P2.2) | Drop operations every active member holds · keep everything, redact deleted text only · snapshots | Decide in P2.2's design; redacting deleted text is the first user-visible need |
 
 ---
 
@@ -169,3 +197,4 @@ The steps below are in order, because each depends on the ones before it.
 | 2026-11-23 | P1.5 reconnect with backoff | `tether_core::backoff` (pure, property-tested); event-driven reconnect loop; QUIC reset and connection-ID keys derived from the device key; idle timeout 15 s; restarted peer reconnected in 0.9 s |
 | 2026-11-23 | P1.4 clipboard events | `tether-os::clipboard` (Windows listener, macOS changeCount, X11 XFixes, polling fallback); password-manager privacy marks honoured; 97 tests plus 3 real-clipboard tests run by hand; copy to peer 4.0 ms p50 over loopback |
 | 2026-11-23 | P1.6 Tauri shell and tray | New crate `tether-app` (eight allow-listed commands, strict CSP, navigation guard, managed daemon); pause end to end (protocol v2, sealed, fail closed); live data in the UI; 118 Rust and 44 frontend tests; release build checked through WebView2 DevTools (34 + 15 checks) |
+| 2026-11-23 | P1.6 follow-up and P2.1 | Open at sign-in (quoted login entry, fixing the unquoted path in tauri-plugin-autostart/auto-launch); pins and deletes on every device (delete wins, LWW pins, content-hash targets), 10,000 seeds green with an oracle; 129 Rust and 46 frontend tests; CLAUDE.md now lists the work waiting for a second device |

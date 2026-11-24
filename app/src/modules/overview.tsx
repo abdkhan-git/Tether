@@ -1,6 +1,8 @@
 import { useMemo, useRef, type RefObject } from "react";
 import { motion } from "motion/react";
+import { errorText } from "@/data/daemon";
 import { useTether } from "@/data/store";
+import { os } from "@/lib/platform";
 import { newestFirst, type Device } from "@/data/types";
 import { bytes, median, rate, timeAgo } from "@/lib/format";
 import { contentOf } from "@/lib/content/detect";
@@ -120,8 +122,9 @@ function Stat({ label, value, decimals = 0, suffix, hint }: { label: string; val
 
 /** This device's identity and the pause switch (desktop app only). */
 function ThisDevice() {
-  const { devices, me, paused, setPaused, toast } = useTether();
+  const { devices, me, paused, setPaused, toast, autostart, backend } = useTether();
   const self = devices.find((d) => d.id === me);
+  const setAutostart = (on: boolean) => void backend.setAutostart(on).catch((e) => toast("Could not change the login setting", errorText(e)));
   return (
     <div>
       <SectionLabel>This device</SectionLabel>
@@ -138,6 +141,15 @@ function ThisDevice() {
         <p className="mt-4 text-xs text-muted-foreground">
           {paused ? "Sync is paused: nothing you copy here leaves this device, and copies from your other devices only reach history." : "Sync is on: what you copy here reaches your other devices, and theirs reach this clipboard."}
         </p>
+        {autostart !== null && (
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium">Open at sign-in</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">Starts in the {os === "macos" ? "menu bar" : "tray"}, so sync resumes after a restart.</p>
+            </div>
+            <Switch checked={autostart} onChange={setAutostart} label="Open Tether at sign-in" />
+          </div>
+        )}
       </Card>
     </div>
   );

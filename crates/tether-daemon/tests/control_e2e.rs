@@ -218,6 +218,42 @@ async fn a_paused_device_sends_nothing_and_applies_nothing_until_resumed() {
     assert!(texts(wait_for_history(&mut cb, 3).await).contains(&"typed on A after resuming".to_string()));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn pins_and_deletes_reach_every_device() {
+    let (mut a, ctl_a) = Daemon::with_control("alpha");
+    let (mut b, ctl_b) = Daemon::with_control("bravo");
+    common::pair(&mut b, &mut a);
+    let (mut ca, mut cb) = (client(&ctl_a).await, client(&ctl_b).await);
+    let mut events_a = client(&ctl_a).await.subscribe().await.unwrap();
+
+    a.send("pin me");
+    a.send("delete me");
+    let b_items = wait_for_history(&mut cb, 2).await;
+    let find = |items: &[HistoryItem], text: &str| items.iter().find(|i| i.text == text).cloned().expect(text);
+    let (keep, gone) = (find(&b_items, "pin me"), find(&b_items, "delete me"));
+
+    // B pins A's copy; A hears about it and shows it pinned.
+    let pin = Request::SetPinned { author: keep.author, seq: keep.seq, pinned: true };
+    assert_eq!(cb.request(&pin).await.unwrap(), Reply::Marked);
+    let e = next_matching(&mut events_a, |e| matches!(e, Event::ItemChanged { seq, .. } if *seq == keep.seq)).await;
+    assert_eq!(e, Event::ItemChanged { author: keep.author, seq: keep.seq, pinned: true, deleted: false });
+    assert!(find(&history(&mut ca, 100).await, "pin me").pinned);
+
+    // A deletes the other one; it leaves both histories, and cannot be marked again.
+    assert_eq!(ca.request(&Request::Delete { author: gone.author, seq: gone.seq }).await.unwrap(), Reply::Marked);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while history(&mut cb, 100).await.iter().any(|i| i.text == "delete me") {
+        assert!(Instant::now() < deadline, "the delete reaches B");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!history(&mut ca, 100).await.iter().any(|i| i.text == "delete me"));
+    let again = cb.request(&Request::Delete { author: gone.author, seq: gone.seq }).await.unwrap_err();
+    assert!(again.to_string().contains("not in history"), "{again}");
+    let missing = ca.request(&Request::SetPinned { author: keep.author, seq: 999, pinned: true }).await.unwrap_err();
+    assert!(missing.to_string().contains("not in history"), "{missing}");
+    assert!(find(&history(&mut cb, 100).await, "pin me").pinned, "the pin survives the delete of another item");
+}
+
 #[test]
 fn a_managed_daemon_stops_cleanly_when_its_app_goes_away() {
     let (mut d, _ctl) = Daemon::managed("alpha");

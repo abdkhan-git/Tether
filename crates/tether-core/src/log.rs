@@ -29,10 +29,31 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::limits::{op_size, op_within_limits, MAX_OPS_PER_MESSAGE, MAX_PAGE_BYTES, MAX_TEXT_BYTES};
+use crate::op::{item_hash, ItemRef};
 use crate::{DeviceId, DeviceKey, Hlc, Op, OpKind, Timestamp};
 
 /// Highest contiguous `seq` held for each device.
 pub type VersionVector = BTreeMap<DeviceId, u64>;
+
+/// A clipboard item's name: the `(device, seq)` of the operation that copied it.
+pub type ItemId = (DeviceId, u64);
+
+/// Pins and deletes, resolved from every effective operation held.
+///
+/// - A delete is a tombstone: once any effective `Delete` names an item, the
+///   item is gone on every device, and no pin brings it back (delete wins).
+/// - A pin is a last-writer-wins register per item: the effective `Pin` with
+///   the highest `(order_key, seq)` decides.
+/// - A pin or delete counts only if its [`ItemRef::hash`] matches the item's
+///   text, so it cannot be aimed at a copy its author never saw.
+///
+/// Like membership, this is a function of the set of operations held, so
+/// every device that holds the same operations reaches the same marks.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Marks {
+    pub deleted: BTreeSet<ItemId>,
+    pub pinned: BTreeSet<ItemId>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyResult {
@@ -402,17 +423,71 @@ impl OpLog {
         (page, false)
     }
 
-    /// Clipboard history, newest first. Identical on every device that holds
-    /// the same operations, whatever order they arrived in.
+    /// Clipboard history, newest first, without deleted items. Identical on
+    /// every device that holds the same operations, whatever order they
+    /// arrived in.
     pub fn clipboard_history(&self) -> Vec<&Op> {
-        let me = self.me();
+        let deleted = self.marks().deleted;
         let mut items: Vec<&Op> = self
             .all_ops()
             .filter(|op| matches!(op.kind, OpKind::ClipboardText(_)))
-            .filter(|op| op.device == me || self.trust.accepts(op.device, op.seq))
+            .filter(|op| self.is_effective(op) && !deleted.contains(&op.id()))
             .collect();
         items.sort_by_key(|op| std::cmp::Reverse(op.order_key()));
         items
+    }
+
+    /// This device's own operations always count; anyone else's only while
+    /// their author is a member within its cutoff.
+    fn is_effective(&self, op: &Op) -> bool {
+        op.device == self.me() || self.trust.accepts(op.device, op.seq)
+    }
+
+    /// The clipboard text of item `id`, if it is held and effective.
+    fn item_text(&self, id: ItemId) -> Option<&str> {
+        let op = self.ops.get(&id.0)?.get(usize::try_from(id.1.checked_sub(1)?).ok()?)?;
+        match &op.kind {
+            OpKind::ClipboardText(text) if self.is_effective(op) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// A reference to item `id` for a new pin or delete, if it is held,
+    /// effective and not deleted.
+    pub fn item_ref(&self, id: ItemId) -> Option<ItemRef> {
+        let text = self.item_text(id)?;
+        if self.marks().deleted.contains(&id) {
+            return None;
+        }
+        Some(ItemRef { device: id.0, seq: id.1, hash: item_hash(text) })
+    }
+
+    /// Resolve every pin and delete held (see [`Marks`]).
+    pub fn marks(&self) -> Marks {
+        let matches = |r: &ItemRef| self.item_text((r.device, r.seq)).is_some_and(|t| item_hash(t) == r.hash);
+        let mut marks = Marks::default();
+        let mut latest_pin: BTreeMap<ItemId, ((Timestamp, DeviceId, u64), bool)> = BTreeMap::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            match &op.kind {
+                OpKind::Delete { item } if matches(item) => {
+                    marks.deleted.insert((item.device, item.seq));
+                }
+                OpKind::Pin { item, pinned } if matches(item) => {
+                    let key = (op.ts, op.device, op.seq);
+                    let slot = latest_pin.entry((item.device, item.seq)).or_insert((key, *pinned));
+                    if key > slot.0 {
+                        *slot = (key, *pinned);
+                    }
+                }
+                _ => {}
+            }
+        }
+        marks.pinned = latest_pin
+            .into_iter()
+            .filter(|(id, (_, pinned))| *pinned && !marks.deleted.contains(id))
+            .map(|(id, _)| id)
+            .collect();
+        marks
     }
 }
 
@@ -578,5 +653,110 @@ mod tests {
         b.apply_remote(op_a, 4_001);
         let ids = |log: &OpLog| log.clipboard_history().iter().map(|op| op.id()).collect::<Vec<_>>();
         assert_eq!(ids(&a), ids(&b));
+    }
+
+    // --- Pins and deletes ---
+
+    fn ids(log: &OpLog) -> Vec<ItemId> {
+        log.clipboard_history().iter().map(|op| op.id()).collect()
+    }
+
+    fn pin(log: &mut OpLog, id: ItemId, pinned: bool, t: u64) -> Op {
+        let item = log.item_ref(id).expect("item held");
+        log.append_local(OpKind::Pin { item, pinned }, t).unwrap()
+    }
+
+    fn delete(log: &mut OpLog, id: ItemId, t: u64) -> Op {
+        let item = log.item_ref(id).expect("item held");
+        log.append_local(OpKind::Delete { item }, t).unwrap()
+    }
+
+    #[test]
+    fn a_delete_hides_the_item_everywhere_even_if_it_arrives_first() {
+        let (mut a, mut b) = pair();
+        let copy = a.append_local(text("oops, a password"), 4_000).unwrap();
+        let mut c = a.clone(); // a third view that sees the delete before the copy
+        sync(&a, &mut b);
+        let del = delete(&mut b, copy.id(), 5_000);
+        assert!(ids(&b).is_empty());
+
+        a.apply_batch(vec![del.clone()], 5_001);
+        assert!(ids(&a).is_empty(), "the author's own history follows the delete");
+
+        // Delete first, then the copy it names: hidden as soon as both are held.
+        let mut fresh = OpLog::new(DeviceKey::for_test(2));
+        fresh.set_root(a.root());
+        let all: Vec<Op> = a.all_ops().filter(|op| op.id() != copy.id()).cloned().collect();
+        fresh.apply_batch(all, 6_000);
+        fresh.apply_batch(vec![copy], 6_001);
+        assert!(ids(&fresh).is_empty());
+        assert!(c.item_ref((a.me(), 2)).is_some(), "an undeleted view still offers the item");
+        c.apply_batch(vec![del], 6_002);
+        assert!(c.item_ref((a.me(), 2)).is_none(), "a deleted item cannot be pinned or deleted again");
+    }
+
+    #[test]
+    fn delete_wins_over_a_concurrent_or_later_pin() {
+        let (mut a, mut b) = pair();
+        let copy = a.append_local(text("item"), 4_000).unwrap();
+        sync(&a, &mut b);
+        let item = b.item_ref(copy.id()).unwrap();
+        let del = delete(&mut a, copy.id(), 5_000);
+        // B pins after A's delete (by clock), not having seen it.
+        let late_pin = b.append_local(OpKind::Pin { item, pinned: true }, 9_000).unwrap();
+        a.apply_batch(vec![late_pin], 9_001);
+        b.apply_batch(vec![del], 9_002);
+        for log in [&a, &b] {
+            assert!(ids(log).is_empty());
+            assert!(log.marks().pinned.is_empty(), "a deleted item is never pinned");
+        }
+    }
+
+    #[test]
+    fn the_latest_pin_wins_in_any_arrival_order() {
+        let (mut a, mut b) = pair();
+        let copy = a.append_local(text("item"), 4_000).unwrap();
+        sync(&a, &mut b);
+        let pin_a = pin(&mut a, copy.id(), true, 5_000);
+        let unpin_b = pin(&mut b, copy.id(), false, 6_000);
+        let pin_again_a = pin(&mut a, copy.id(), true, 5_500); // earlier than B's unpin
+        a.apply_batch(vec![unpin_b.clone()], 7_000);
+        b.apply_batch(vec![pin_again_a.clone(), pin_a.clone()], 7_000);
+        assert_eq!(a.marks(), b.marks());
+        assert!(a.marks().pinned.is_empty(), "B's unpin is the latest");
+
+        // A later pin from A wins again.
+        let pin_last = pin(&mut a, copy.id(), true, 8_000);
+        b.apply_batch(vec![pin_last], 8_001);
+        assert_eq!(a.marks(), b.marks());
+        assert_eq!(a.marks().pinned, BTreeSet::from([copy.id()]));
+    }
+
+    #[test]
+    fn a_pin_or_delete_with_the_wrong_hash_does_nothing() {
+        let (mut a, mut b) = pair();
+        // B aims at A's next copy before it exists, guessing its text wrong.
+        let future = ItemRef { device: a.me(), seq: 2, hash: item_hash("a guess") };
+        let pre_delete = b.append_local(OpKind::Delete { item: future }, 4_000).unwrap();
+        let pre_pin = b.append_local(OpKind::Pin { item: future, pinned: true }, 4_001).unwrap();
+        a.apply_batch(vec![pre_delete, pre_pin], 4_002);
+        let copy = a.append_local(text("the real text"), 5_000).unwrap();
+        assert_eq!(copy.id(), (a.me(), 2));
+        assert_eq!(ids(&a), vec![copy.id()], "the copy is not hidden");
+        assert_eq!(a.marks(), Marks::default());
+    }
+
+    #[test]
+    fn a_revoked_devices_later_deletes_do_not_count() {
+        let (mut a, mut b) = pair();
+        let copy = a.append_local(text("keep me"), 4_000).unwrap();
+        sync(&a, &mut b);
+        let cutoff = a.ops_from(b.me()).len() as u64;
+        let revoke = a.append_local(OpKind::DeviceRevoked { device: b.me(), after_seq: cutoff }, 5_000).unwrap();
+        let del = delete(&mut b, copy.id(), 6_000); // B was compromised and deletes anyway
+        a.apply_batch(vec![del], 6_001);
+        assert_eq!(ids(&a), vec![copy.id()]);
+        b.apply_batch(vec![revoke], 6_002);
+        assert!(b.is_revoked());
     }
 }

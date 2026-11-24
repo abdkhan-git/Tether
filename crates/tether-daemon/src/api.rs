@@ -8,25 +8,39 @@ use anyhow::{anyhow, Result};
 use quinn::Endpoint;
 use tether_core::content::{self, Delivery};
 use tether_core::pairing::{code_from_random, MAX_ATTEMPTS, WINDOW_SECS};
-use tether_core::{DeviceId, Op, OpKind};
+use tether_core::{DeviceId, ItemId, Op, OpKind};
 use tether_ipc::{
     Cursor, Device, DeviceState, HistoryItem, HistoryPage, PairCode, Status, HISTORY_PAGE_BYTES, MAX_HISTORY_PAGE,
 };
 
-use crate::ctx::Ctx;
+use crate::ctx::{Ctx, Mark};
 use crate::{net, pair};
 
 /// Rough per-item overhead when budgeting a history page.
 const ITEM_OVERHEAD: usize = 128;
 
 /// The history entry for `op`, or `None` if it is not clipboard text.
-pub fn item(op: &Op, me: DeviceId) -> Option<HistoryItem> {
+pub fn item(op: &Op, me: DeviceId, pinned: bool) -> Option<HistoryItem> {
     let OpKind::ClipboardText(text) = &op.kind else { return None };
     let held = match (op.device == me, content::delivery_for(text)) {
         (false, Delivery::Hold(reason)) => Some(reason),
         _ => None,
     };
-    Some(HistoryItem { author: op.device, seq: op.seq, at: op.ts, text: text.clone(), held })
+    Some(HistoryItem { author: op.device, seq: op.seq, at: op.ts, text: text.clone(), held, pinned })
+}
+
+/// Pin or unpin a history item, here and on every other device.
+pub fn set_pinned(ctx: &Ctx, item: ItemId, pinned: bool) -> Result<()> {
+    let op = ctx.mark(item, Mark::Pin(pinned))?;
+    net::broadcast(ctx, op);
+    Ok(())
+}
+
+/// Delete a history item, here and on every other device.
+pub fn delete(ctx: &Ctx, item: ItemId) -> Result<()> {
+    let op = ctx.mark(item, Mark::Delete)?;
+    net::broadcast(ctx, op);
+    Ok(())
 }
 
 pub fn status(ctx: &Ctx, port: u16) -> Status {
@@ -92,11 +106,12 @@ pub fn history(ctx: &Ctx, before: Option<Cursor>, limit: u16) -> HistoryPage {
     let s = ctx.lock();
     let me = s.log.me();
     let all = s.log.clipboard_history();
+    let pinned = s.log.marks().pinned;
     // `all` is sorted newest first, so the items at or after the cursor form a prefix.
     let start = before.map_or(0, |c| all.partition_point(|op| op.order_key() >= (c.at, c.device)));
     let (mut items, mut bytes) = (Vec::new(), 0usize);
     for op in &all[start..] {
-        let Some(item) = item(op, me) else { continue };
+        let Some(item) = item(op, me, pinned.contains(&op.id())) else { continue };
         let size = item.text.len() + ITEM_OVERHEAD;
         if items.len() == limit || (!items.is_empty() && bytes + size > HISTORY_PAGE_BYTES) {
             break;

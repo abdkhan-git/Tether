@@ -27,7 +27,7 @@ pub fn op_size(op: &Op) -> usize {
         + match &op.kind {
             OpKind::ClipboardText(t) => t.len(),
             OpKind::DeviceAdded { name, .. } => name.len(),
-            OpKind::DeviceRevoked { .. } => 0,
+            OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } => 0,
         }
 }
 
@@ -37,6 +37,6 @@ pub fn op_within_limits(op: &Op) -> bool {
         && match &op.kind {
             OpKind::ClipboardText(t) => t.len() <= MAX_TEXT_BYTES,
             OpKind::DeviceAdded { name, .. } => name.len() <= MAX_NAME_BYTES,
-            OpKind::DeviceRevoked { .. } => true,
+            OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } => true,
         }
 }

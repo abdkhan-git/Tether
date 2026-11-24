@@ -59,10 +59,12 @@ fn main() {
     }
     let sum = |f: fn(&Report) -> usize| reports.iter().map(f).sum::<usize>();
     println!(
-        "{seeds} seeds, {} devices, {} steps each, {threads} threads: {failed} failed, {} ops, {} network faults, {} attacks, {} revocations, {:.2?}",
+        "{seeds} seeds, {} devices, {} steps each, {threads} threads: {failed} failed, {} ops, {} pins/unpins/deletes ({} deletes), {} network faults, {} attacks, {} revocations, {:.2?}",
         cfg.devices,
         cfg.steps,
         sum(|r| r.ops),
+        sum(|r| r.marks),
+        sum(|r| r.deletes),
         sum(|r| r.faults),
         sum(|r| r.attacks),
         sum(|r| r.revoked as usize),

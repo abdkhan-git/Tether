@@ -99,16 +99,16 @@ Users can turn any non-core module off from the Modules page (the grid button in
 
 ## Data layer
 
-`app/src/data/store.ts` is a zustand store of devices, clips, transfers, workspaces and log operations, plus a `Backend`: what the UI asks of whoever holds the data (revoke, pause, pair, join, older history, open a link).
+`app/src/data/store.ts` is a zustand store of devices, clips, transfers, workspaces and log operations, plus a `Backend`: what the UI asks of whoever holds the data (revoke, pause, pair, join, pin, delete, older history, open a link, open at sign-in).
 
 - **In the desktop app** (`main.tsx` checks `inDesktopApp`), `live.ts` swaps in the daemon backend. `daemon.ts` is the typed bridge: one function per Tauri command, and listeners for `tether://event` (new copies, device changes, pause) and `tether://link` (whether the daemon can be reached). `map.ts` turns daemon shapes into UI shapes and is unit-tested. Round trips are re-read every 3 s while the window is visible.
 - **In a browser**, the preview backend and `startMockDaemon()` simulate peers copying text, transfer progress and latency jitter.
 
-Modules carry `daemon: true` when the daemon implements what they show (Overview, Clipboard, Devices, Diagnostics). Inside the app the others (Transfers, Workspaces) are listed under "Coming" on the Modules page instead of showing sample data. Clipboard actions the daemon cannot do yet (pin, keep local, push to a device, delete everywhere) are hidden in the app; they need merge rules in the log (P2).
+Modules carry `daemon: true` when the daemon implements what they show (Overview, Clipboard, Devices, Diagnostics). Inside the app the others (Transfers, Workspaces) are listed under "Coming" on the Modules page instead of showing sample data. Pin and "Delete everywhere" go through the daemon (signed operations merged on every device; see SECURITY.md, "Pins and deletes"). "Keep on this device" for an item already synced and "push to one device" are preview-only and hidden in the app.
 
 ### The desktop shell (`app/src-tauri`)
 
-- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `open_link`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to `capabilities/main.json`; without all three the page cannot call it.
+- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `set_paused`, `set_pinned`, `delete_item`, `open_link`, `autostart`, `set_autostart`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to `capabilities/main.json`; without all three the page cannot call it.
 - **Rules for the page** (SECURITY.md, "Desktop app"): no remote content, no inline `<style>` or `<script>` (the CSP blocks them), links only through `backend.openLink`, never `window.open` or `<a href>` to outside pages (the window refuses to navigate away from the app).
 - **Window:** closing it hides it to the tray. Tray menu: Open Tether, Pause sync, Quit Tether. Its state always comes from the daemon.
 - **Daemon:** if none answers for the profile, the app starts the `tetherd` next to its executable with `--managed`, which stops when the app does. Its log is `%LOCALAPPDATA%\Tether\logs\tetherd-<profile>.log`.
@@ -119,6 +119,5 @@ Modules carry `daemon: true` when the daemon implements what they show (Overview
 - File transfer and workspace capture are UI only; the daemon does not implement them yet.
 - "Show in File Explorer" for copied paths is not offered: a network path from another device would leak the NTLM hash. It needs a local-paths-only check.
 - Other devices' OS, names you choose for them, and their version vectors are not reported by the daemon yet.
-- No start at login yet.
 - The JS bundle is about 245 KB gzipped. That's fine for a local app, but worth code-splitting per module if it grows.
 - No automated UI tests yet; the shell was checked by hand through the WebView2 DevTools protocol.

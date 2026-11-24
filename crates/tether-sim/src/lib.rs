@@ -5,7 +5,9 @@
 //!
 //! One seed drives every random choice, so a failing seed replays exactly.
 
-use tether_core::{DeviceId, DeviceKey, Op, OpKind, OpLog};
+use std::collections::{BTreeMap, BTreeSet};
+
+use tether_core::{DeviceId, DeviceKey, ItemId, Op, OpKind, OpLog, Timestamp};
 
 /// SplitMix64: tiny, fast, and fully reproducible across platforms.
 pub struct Rng(u64);
@@ -61,6 +63,10 @@ pub struct Report {
     pub faults: usize,
     pub blocked: usize,
     pub attacks: usize,
+    /// Pins, unpins and deletes made by devices.
+    pub marks: usize,
+    /// Of those, deletes.
+    pub deletes: usize,
     pub revoked: bool,
     /// `None` when every invariant held.
     pub failure: Option<String>,
@@ -108,6 +114,8 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
     }
     let attacker = DeviceKey::for_test(10_000 + seed);
     let revoke_at = rng.chance(cfg.revocation_rate).then(|| rng.below(cfg.steps as u64) as usize);
+    // Every pin and delete a device made, kept for the oracle in `check_marks`.
+    let mut marks: Vec<Op> = Vec::new();
 
     for step in 0..cfg.steps {
         now += 1 + rng.below(50);
@@ -129,12 +137,31 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
             report.attacks += 1;
         }
 
-        if rng.below(10) < 4 {
+        let roll = rng.below(100);
+        if roll < 34 {
             let d = rng.below(n as u64) as usize;
             let t = physical(now, devices[d].skew_ms);
             devices[d].log.append_local(OpKind::ClipboardText(format!("d{d}-step{step}")), t).expect("within limits");
             devices[d].created += 1;
             report.ops += 1;
+        } else if roll < 40 {
+            // Pin, unpin or delete something this device can see.
+            let d = rng.below(n as u64) as usize;
+            let history: Vec<ItemId> = devices[d].log.clipboard_history().iter().map(|op| op.id()).collect();
+            if !history.is_empty() {
+                let id = history[rng.below(history.len() as u64) as usize];
+                let item = devices[d].log.item_ref(id).expect("an item in history can be referenced");
+                let kind = match rng.below(3) {
+                    0 => OpKind::Delete { item },
+                    1 => OpKind::Pin { item, pinned: true },
+                    _ => OpKind::Pin { item, pinned: false },
+                };
+                report.deletes += usize::from(matches!(kind, OpKind::Delete { .. }));
+                let t = physical(now, devices[d].skew_ms);
+                marks.push(devices[d].log.append_local(kind, t).expect("within limits"));
+                devices[d].created += 1;
+                report.marks += 1;
+            }
         } else {
             let from = rng.below(n as u64) as usize;
             let to = (from + 1 + rng.below(n as u64 - 1) as usize) % n;
@@ -175,7 +202,9 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
         }
     }
 
-    report.failure = check_local_invariants(&devices).or_else(|| check_convergence(&devices));
+    report.failure = check_local_invariants(&devices)
+        .or_else(|| check_convergence(&devices))
+        .or_else(|| check_marks(&devices, &marks));
     report
 }
 
@@ -243,7 +272,16 @@ fn attack(devices: &mut [Device], attacker: &DeviceKey, now: u64, rng: &mut Rng)
     let author_id = devices[author].log.me();
     let next = devices[victim].log.ops_from(author_id).len() as u64 + 1;
     let ts = devices[victim].log.clock();
-    let forged = match rng.below(4) {
+    let forged = match rng.below(5) {
+        // Deletes a real item, signed by the attacker, claiming to be a member.
+        // If it stuck, `check_marks` would find the item missing.
+        4 => {
+            let target = devices[victim].log.clipboard_history().first().map(|op| op.id());
+            let Some(item) = target.and_then(|id| devices[victim].log.item_ref(id)) else { return };
+            let mut op = Op::sign(attacker, next, ts, OpKind::Delete { item });
+            op.device = author_id;
+            op
+        }
         // Signed by the attacker, claiming to be a member.
         0 => {
             let mut op = Op::sign(attacker, next, ts, OpKind::ClipboardText(FORGED.into()));
@@ -277,8 +315,62 @@ fn holds_forgery(log: &OpLog) -> bool {
     log.all_ops().any(|op| match &op.kind {
         OpKind::ClipboardText(t) => t == FORGED,
         OpKind::DeviceAdded { name, .. } => name == FORGED,
-        OpKind::DeviceRevoked { .. } => false,
+        // Forged deletes carry real item references; `check_marks` catches them.
+        OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } => false,
     })
+}
+
+/// Pins and deletes, checked against an oracle built from what the devices
+/// actually did (not from the log's own resolution):
+/// - an item is deleted exactly when some effective delete names it (delete
+///   wins; nothing else can hide an item, forged deletes included);
+/// - an undeleted item is pinned exactly when its latest effective pin, by
+///   (HLC time, device, seq), says so.
+///
+/// "Effective" means the author was not revoked, or the operation is within
+/// its cutoff; and the item itself must be effective too.
+fn check_marks(devices: &[Device], marks: &[Op]) -> Option<String> {
+    let effective = |author: DeviceId, seq: u64| {
+        devices
+            .iter()
+            .find(|d| d.log.me() == author)
+            .is_some_and(|d| !matches!(d.revoked_after, Some(cutoff) if seq > cutoff))
+    };
+    let mut deleted: BTreeSet<ItemId> = BTreeSet::new();
+    let mut latest: BTreeMap<ItemId, ((Timestamp, DeviceId, u64), bool)> = BTreeMap::new();
+    for op in marks.iter().filter(|op| effective(op.device, op.seq)) {
+        match &op.kind {
+            OpKind::Delete { item } if effective(item.device, item.seq) => {
+                deleted.insert((item.device, item.seq));
+            }
+            OpKind::Pin { item, pinned } if effective(item.device, item.seq) => {
+                let key = (op.ts, op.device, op.seq);
+                let slot = latest.entry((item.device, item.seq)).or_insert((key, *pinned));
+                if key > slot.0 {
+                    *slot = (key, *pinned);
+                }
+            }
+            _ => {}
+        }
+    }
+    let pinned: BTreeSet<ItemId> =
+        latest.into_iter().filter(|(id, (_, p))| *p && !deleted.contains(id)).map(|(id, _)| id).collect();
+
+    for d in devices.iter().filter(|d| d.revoked_after.is_none()) {
+        let got = d.log.marks();
+        if got.deleted != deleted {
+            let (extra, missing): (Vec<_>, Vec<_>) =
+                (got.deleted.difference(&deleted).collect(), deleted.difference(&got.deleted).collect());
+            return Some(format!("{} deleted the wrong items: extra {extra:?}, missing {missing:?}", d.log.me()));
+        }
+        if got.pinned != pinned {
+            return Some(format!("{} pins {:?}, expected {:?}", d.log.me(), got.pinned, pinned));
+        }
+        if let Some(op) = d.log.clipboard_history().iter().find(|op| deleted.contains(&op.id())) {
+            return Some(format!("{} still shows deleted item {:?}", d.log.me(), op.id()));
+        }
+    }
+    None
 }
 
 /// Invariants that must hold at every step, not only at the end.
@@ -360,14 +452,17 @@ mod tests {
     fn many_seeds_converge_under_attack() {
         // The 10,000-seed run is the CLI's job (in CI, in release mode).
         let cfg = Config::default();
-        let (mut attacks, mut revocations) = (0, 0);
+        let (mut attacks, mut revocations, mut deletes, mut marks) = (0, 0, 0, 0);
         for seed in 0..300 {
             let report = run(seed, &cfg);
             assert!(report.failure.is_none(), "seed {seed} failed: {:?}", report.failure);
             attacks += report.attacks;
             revocations += report.revoked as usize;
+            deletes += report.deletes;
+            marks += report.marks;
         }
         assert!(attacks > 300 && revocations > 80, "the adversary must actually be exercised");
+        assert!(deletes > 1_000 && marks > 3 * deletes / 2, "pins and deletes must actually be exercised");
     }
 
     #[test]

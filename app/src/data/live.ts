@@ -4,7 +4,7 @@
 
 import { os } from "@/lib/platform";
 import { daemon, errorText, type DaemonEvent } from "./daemon";
-import { clipOf, devicesOf, heldBecause, mergeClips, nearbyOf, shortId, withArticle } from "./map";
+import { applyItemChange, clipOf, devicesOf, heldBecause, itemOf, mergeClips, nearbyOf, shortId, withArticle } from "./map";
 import { useTether, type Backend } from "./store";
 
 /** Items fetched per history page (the daemon's maximum). */
@@ -72,6 +72,9 @@ function onEvent(e: DaemonEvent) {
     case "paused":
       set({ paused: e.paused });
       break;
+    case "itemChanged":
+      set({ clips: applyItemChange(s.clips, e) });
+      break;
     case "lagged":
       void refreshAll();
       break;
@@ -98,6 +101,20 @@ const liveBackend: Backend = {
   openLink(url) {
     daemon.openLink(url).catch((e) => get().toast("Could not open the link", errorText(e)));
   },
+  async setAutostart(enabled) {
+    set({ autostart: await daemon.setAutostart(enabled) });
+  },
+  // The daemon answers with an itemChanged event, which updates the list.
+  async setPinned(clipId, pinned) {
+    const item = itemOf(clipId);
+    if (!item) throw new Error("That item is not in history");
+    await daemon.setPinned(item.author, item.seq, pinned);
+  },
+  async deleteItem(clipId) {
+    const item = itemOf(clipId);
+    if (!item) throw new Error("That item is not in history");
+    await daemon.deleteItem(item.author, item.seq);
+  },
 };
 
 /** Switch the store from preview data to the daemon and follow it. */
@@ -114,6 +131,11 @@ export async function connectDaemon(): Promise<void> {
     workspaces: [],
     ops: [],
   });
+  // An app setting, not the daemon's: readable even before the daemon answers.
+  daemon.autostart().then(
+    (autostart) => set({ autostart }),
+    () => set({ autostart: null }),
+  );
   await daemon.onEvent(onEvent);
   await daemon.onLink((link) => {
     if (link.state === "connected") void refreshAll();

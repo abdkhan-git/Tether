@@ -10,7 +10,7 @@ use tether_core::content::HoldReason;
 use tether_core::{DeviceId, Timestamp};
 
 /// Bumped on any change to the messages below; both ends must match.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Largest request a client may send.
 pub const MAX_REQUEST_BYTES: usize = 16 << 10;
 /// Largest reply or event the daemon sends (one clipboard item can be 1 MiB).
@@ -45,6 +45,17 @@ pub enum Request {
     SetPaused {
         paused: bool,
     },
+    /// Pin or unpin a history item on every device. The latest pin wins.
+    SetPinned {
+        author: DeviceId,
+        seq: u64,
+        pinned: bool,
+    },
+    /// Remove a history item on every device. Final: nothing brings it back.
+    Delete {
+        author: DeviceId,
+        seq: u64,
+    },
     /// Turn this connection into a stream of [`Event`]s.
     Subscribe,
 }
@@ -61,9 +72,13 @@ pub enum Reply {
     Devices(Vec<Device>),
     History(HistoryPage),
     PairCode(PairCode),
-    Joined { device: DeviceId },
+    Joined {
+        device: DeviceId,
+    },
     Revoked,
     Paused(bool),
+    /// A pin or delete was recorded (and sent to the other devices).
+    Marked,
     Subscribed,
 }
 
@@ -128,6 +143,7 @@ pub struct HistoryItem {
     /// Set when the item came from another device and was kept out of the
     /// system clipboard (it looks like a command or hides characters).
     pub held: Option<HoldReason>,
+    pub pinned: bool,
 }
 
 impl HistoryItem {
@@ -156,6 +172,9 @@ pub enum Event {
     DevicesChanged,
     /// Sync was paused (`true`) or resumed on this device.
     Paused(bool),
+    /// An item was pinned, unpinned or deleted, here or on another device.
+    /// A deleted item is gone from history: drop it.
+    ItemChanged { author: DeviceId, seq: u64, pinned: bool, deleted: bool },
     /// This subscriber fell behind and missed events; refresh everything.
     Lagged { missed: u64 },
 }

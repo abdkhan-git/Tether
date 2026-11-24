@@ -53,12 +53,25 @@ export function clipOf(item: DaemonClip, fresh = false): Clip {
     ts: item.at,
     counter: item.counter,
     text: item.text,
-    pinned: false,
+    pinned: item.pinned,
     // The daemon never syncs secrets; this masks things like access tokens on screen.
     sensitive: contentOf(item.text).sensitive,
     held: item.held,
     fresh,
   };
+}
+
+/** The daemon's name for a clip: its author and sequence number. */
+export function itemOf(clipId: string): { author: string; seq: number } | null {
+  const [author, seq] = clipId.split(":");
+  const n = Number(seq);
+  return /^[0-9a-f]{64}$/.test(author ?? "") && Number.isSafeInteger(n) && n > 0 ? { author, seq: n } : null;
+}
+
+/** Apply a pin or delete the daemon reported: a deleted item leaves the list. */
+export function applyItemChange(clips: Clip[], change: { author: string; seq: number; pinned: boolean; deleted: boolean }): Clip[] {
+  const id = `${change.author}:${change.seq}`;
+  return change.deleted ? clips.filter((c) => c.id !== id) : clips.map((c) => (c.id === id ? { ...c, pinned: change.pinned } : c));
 }
 
 /** Add `incoming` to `clips` (replacing any copy with the same id), newest first. */

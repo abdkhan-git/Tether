@@ -46,6 +46,7 @@ export interface DaemonClip {
   counter: number;
   text: string;
   held: HoldReason | null;
+  pinned: boolean;
 }
 
 export interface HistoryPage {
@@ -59,6 +60,7 @@ export type DaemonEvent =
   | { type: "keptLocal"; kind: string }
   | { type: "devicesChanged" }
   | { type: "paused"; paused: boolean }
+  | { type: "itemChanged"; author: string; seq: number; pinned: boolean; deleted: boolean }
   | { type: "lagged" };
 
 export const daemon = {
@@ -69,7 +71,11 @@ export const daemon = {
   join: (code: string, addr: string | null) => invoke<string>("join", { code, addr }),
   revoke: (device: string) => invoke<void>("revoke", { device }),
   setPaused: (paused: boolean) => invoke<boolean>("set_paused", { paused }),
+  setPinned: (author: string, seq: number, pinned: boolean) => invoke<void>("set_pinned", { author, seq, pinned }),
+  deleteItem: (author: string, seq: number) => invoke<void>("delete_item", { author, seq }),
   openLink: (url: string) => invoke<void>("open_link", { url }),
+  autostart: () => invoke<boolean>("autostart"),
+  setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   onEvent: (f: (e: DaemonEvent) => void): Promise<UnlistenFn> => listen<DaemonEvent>("tether://event", (e) => f(e.payload)),
   onLink: (f: (s: LinkState) => void): Promise<UnlistenFn> => listen<LinkState>("tether://link", (e) => f(e.payload)),
 };

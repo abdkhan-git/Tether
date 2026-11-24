@@ -103,6 +103,14 @@ async fn handle(ctx: &Ctx, quic: &quinn::Endpoint, request: Request) -> Result<R
             Reply::Revoked
         }
         Request::SetPaused { paused } => Reply::Paused(api::set_paused(ctx, paused)?),
+        Request::SetPinned { author, seq, pinned } => {
+            api::set_pinned(ctx, (author, seq), pinned)?;
+            Reply::Marked
+        }
+        Request::Delete { author, seq } => {
+            api::delete(ctx, (author, seq))?;
+            Reply::Marked
+        }
         Request::Subscribe => bail!("Subscribe is handled before this point"),
     })
 }

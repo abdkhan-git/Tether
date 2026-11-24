@@ -22,6 +22,8 @@ pub mod wire;
 pub use clock::{Clock, SystemClock};
 pub use hlc::{Hlc, Timestamp};
 pub use identity::{DeviceId, DeviceKey, Signature};
-pub use log::{derive_trust, ApplyResult, BatchOutcome, LocalError, OpLog, Rejection, Trust, VersionVector};
-pub use op::{Op, OpKind};
+pub use log::{
+    derive_trust, ApplyResult, BatchOutcome, ItemId, LocalError, Marks, OpLog, Rejection, Trust, VersionVector,
+};
+pub use op::{item_hash, ItemRef, Op, OpKind};
 pub use wire::{DecodeError, Message};

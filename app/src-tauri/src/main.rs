@@ -13,6 +13,7 @@
 
 mod guard;
 mod link;
+mod login;
 mod tray;
 mod view;
 
@@ -26,7 +27,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::link::Link;
 
-const DEFAULT_PROFILE: &str = "default";
+use crate::login::DEFAULT_PROFILE;
 /// Events from the daemon, as `view::Event`.
 const EVENT: &str = "tether://event";
 /// Whether the daemon can be reached, as `view::LinkState`.
@@ -91,6 +92,22 @@ async fn revoke(link: State<'_, Arc<Link>>, device: String) -> Res<()> {
 }
 
 #[tauri::command]
+async fn set_pinned(link: State<'_, Arc<Link>>, author: String, seq: u64, pinned: bool) -> Res<()> {
+    match link.call(Request::SetPinned { author: view::device_id(&author)?, seq, pinned }, true).await? {
+        Reply::Marked => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
+#[tauri::command]
+async fn delete_item(link: State<'_, Arc<Link>>, author: String, seq: u64) -> Res<()> {
+    match link.call(Request::Delete { author: view::device_id(&author)?, seq }, false).await? {
+        Reply::Marked => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
+#[tauri::command]
 async fn set_paused(link: State<'_, Arc<Link>>, paused: bool) -> Res<bool> {
     match link.call(Request::SetPaused { paused }, true).await? {
         Reply::Paused(p) => Ok(p),
@@ -106,31 +123,64 @@ fn open_link(url: String) -> Res<()> {
     open::that_detached(url.as_str()).map_err(|e| format!("could not open the link: {e}"))
 }
 
+/// This run's login entry (see `login`).
+struct LoginEntry(Result<auto_launch::AutoLaunch, String>);
+
+/// Whether Tether opens when the user signs in to this computer.
+#[tauri::command]
+fn autostart(entry: State<'_, LoginEntry>) -> Res<bool> {
+    let entry = entry.0.as_ref().map_err(Clone::clone)?;
+    entry.is_enabled().map_err(|e| format!("could not read the login setting: {e}"))
+}
+
+/// Turn opening at sign-in on or off. Off until the user turns it on here.
+#[tauri::command]
+fn set_autostart(entry: State<'_, LoginEntry>, enabled: bool) -> Res<bool> {
+    let entry = entry.0.as_ref().map_err(Clone::clone)?;
+    let result = if enabled { entry.enable() } else { entry.disable() };
+    result.map_err(|e| format!("could not change the login setting: {e}"))?;
+    info!(enabled, "open at sign-in changed");
+    entry.is_enabled().map_err(|e| format!("could not read the login setting: {e}"))
+}
+
 // --- Startup ---
 
-/// `--profile NAME` picks the daemon to talk to (as for tetherd and the CLI).
-fn profile_from_args() -> Result<String, String> {
-    let mut args = std::env::args().skip(1);
-    let mut profile = DEFAULT_PROFILE.to_string();
+/// How this run was started.
+#[derive(Debug, PartialEq, Eq)]
+struct Launch {
+    /// The daemon to talk to (`--profile NAME`, as for tetherd and the CLI).
+    profile: String,
+    /// Started at sign-in: stay in the tray until the user opens the window.
+    hidden: bool,
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Launch, String> {
+    let mut args = args.into_iter();
+    let mut launch = Launch { profile: DEFAULT_PROFILE.to_string(), hidden: false };
     while let Some(arg) = args.next() {
-        if arg == "--profile" {
-            profile = args.next().ok_or("--profile needs a name")?;
+        match arg.as_str() {
+            "--profile" => launch.profile = args.next().ok_or("--profile needs a name")?,
+            "--hidden" => launch.hidden = true,
+            _ => {}
         }
     }
-    let valid = !profile.is_empty()
-        && profile.len() <= 32
-        && profile.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let p = &launch.profile;
+    let valid =
+        !p.is_empty() && p.len() <= 32 && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if valid {
-        Ok(profile)
+        Ok(launch)
     } else {
         Err("--profile may only contain letters, digits, '-' and '_' (at most 32)".into())
     }
 }
 
-fn main_window(app: &AppHandle) -> tauri::Result<()> {
+fn main_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
     let dev = tauri::is_dev();
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Tether")
+        .visible(!hidden)
+        // A start at sign-in stays in the tray: no focus taken from what the user is doing.
+        .focused(!hidden)
         .inner_size(1240.0, 820.0)
         .min_inner_size(900.0, 600.0)
         .center()
@@ -163,8 +213,8 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
-    let profile = match profile_from_args() {
-        Ok(p) => p,
+    let Launch { profile, hidden } = match parse_args(std::env::args().skip(1)) {
+        Ok(launch) => launch,
         Err(e) => {
             eprintln!("tether-app: {e}");
             std::process::exit(2);
@@ -180,11 +230,25 @@ fn main() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_window(app)));
     }
     let app = builder
+        .manage(LoginEntry(login::entry(&profile)))
         .manage(link.clone())
-        .invoke_handler(tauri::generate_handler![status, devices, history, pair, join, revoke, set_paused, open_link])
+        .invoke_handler(tauri::generate_handler![
+            status,
+            devices,
+            history,
+            pair,
+            join,
+            revoke,
+            set_paused,
+            set_pinned,
+            delete_item,
+            open_link,
+            autostart,
+            set_autostart
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            main_window(&handle)?;
+            main_window(&handle, hidden)?;
             let tray = tray::build(&handle)?;
             app.manage(tray);
             info!(%profile, "Tether started");
@@ -213,4 +277,34 @@ fn main() {
             link.shutdown();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn launch_arguments() {
+        assert_eq!(parse_args(args(&[])).unwrap(), Launch { profile: "default".into(), hidden: false });
+        assert_eq!(
+            parse_args(args(&["--hidden", "--profile", "left"])).unwrap(),
+            Launch { profile: "left".into(), hidden: true }
+        );
+        for bad in [&["--profile"][..], &["--profile", ""], &["--profile", "a b"], &["--profile", "../x"]] {
+            assert!(parse_args(args(bad)).is_err(), "{bad:?} accepted");
+        }
+    }
+
+    #[test]
+    fn the_login_entry_starts_hidden_on_the_same_profile() {
+        for profile in ["default", "left"] {
+            let launch = parse_args(login::login_args(profile)).unwrap();
+            assert_eq!(launch, Launch { profile: profile.into(), hidden: true });
+        }
+        assert_ne!(login::login_entry_name("default"), login::login_entry_name("left"));
+    }
 }

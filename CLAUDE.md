@@ -6,6 +6,16 @@ Peer-to-peer, end-to-end encrypted sync for clipboard, files and workspaces acro
 
 When the owner says "let's continue" (or starts a new session without a specific task), read [docs/HANDOFF.md](docs/HANDOFF.md) first. It holds the current state, the next unchecked step, open decisions and the working agreements. Check it against the code (`git log`, the files it names) before acting. At the end of every task or session, update HANDOFF.md: tick finished steps, rewrite "Current state" and "Next up", add a session-log line. The owner runs git: give commands, never commit, no Claude attribution.
 
+## Work that needs a second device
+
+Some steps can only be done with two real machines, and the owner does not always have the second one (a MacBook) at hand. When the owner says it is available ("I have my MacBook", "let's do the two-machine check"), set the current single-machine work aside at a clean point and do these, in order. Details and checklists are in HANDOFF.md under "Waiting for a second device".
+
+1. **P1 step 7, the two-machine check:** build the app on both machines, pair them, copy both ways, turn on "Open at sign-in", reboot each machine and record how long sync takes to resume. This is also the first real run of the macOS tray, WKWebView, Keychain and `changeCount` clipboard code. Record hardware, network and method for every number.
+2. **P1 step 8, close out P1** (ROADMAP, SECURITY status table, PROJECT_CONTEXT, README, HANDOFF).
+3. **P2's published latency:** p50/p99 copy-to-paste latency between the two machines, for the README.
+
+Until then, keep working on single-machine items from HANDOFF "Next up". Test multi-device behaviour with two profiles on one machine (`--profile left` / `--profile right`, `npx tauri dev -- -- --profile left`) and the simulator, and say plainly which results came from one machine.
+
 ## Reference docs
 
 Before planning or changing anything, read:
@@ -23,7 +33,7 @@ Before planning or changing anything, read:
 - `crates/tether-os`: OS integration, the only crate allowed `unsafe` (every block has a `// SAFETY:` comment, enforced by clippy). Holds the owner-only local channel (named pipe / Unix socket) and clipboard change detection plus app privacy marks (`clipboard`). Tests that touch the real clipboard are `#[ignore]`d; run them by hand with `-- --ignored`.
 - `crates/tether-ipc`: the local control protocol (frames, mutual token handshake, requests/replies/events, client) used by the daemon, the CLI and the desktop app.
 - `crates/tether-cli`: the `tether` command (status, devices, history, watch, pair, join, revoke). A client of the control channel only; everything it prints from the daemon goes through `term::safe` (no terminal escapes).
-- `app/src-tauri`: the `tether-app` crate, the Tauri 2 shell (window, tray). A thin client of the control channel; the page may call only the eight commands in `build.rs` / `capabilities/main.json`, and the window refuses to navigate anywhere but the bundled page. Starts `tetherd --managed` from beside its own executable when no daemon answers.
+- `app/src-tauri`: the `tether-app` crate, the Tauri 2 shell (window, tray). A thin client of the control channel; the page may call only the commands listed in `build.rs` and granted in `capabilities/main.json`, and the window refuses to navigate anywhere but the bundled page. Starts `tetherd --managed` from beside its own executable when no daemon answers.
 - `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion). Live data from the daemon inside the app, sample data in a plain browser. Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
 
 ## Commands

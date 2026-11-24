@@ -27,6 +27,30 @@ pub enum OpKind {
     /// than `after_seq` are rejected by every device; earlier ones remain,
     /// because history is immutable.
     DeviceRevoked { device: DeviceId, after_seq: u64 },
+    /// Pin or unpin a clipboard item. The latest pin for an item wins
+    /// (by [`Op::order_key`], then `seq`), the same on every device.
+    Pin { item: ItemRef, pinned: bool },
+    /// Remove a clipboard item from history on every device. Final: no pin,
+    /// earlier or later, brings it back.
+    Delete { item: ItemRef },
+}
+
+/// A clipboard item, as a pin or delete names it: the operation that copied
+/// it, and a hash of its text. A pin or delete takes effect only on an item
+/// whose text matches the hash, so a device cannot aim one at a copy it has
+/// not seen (such as another device's future copies).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ItemRef {
+    pub device: DeviceId,
+    pub seq: u64,
+    pub hash: [u8; 32],
+}
+
+/// Domain-separated BLAKE3 hash of an item's text, for [`ItemRef::hash`].
+pub fn item_hash(text: &str) -> [u8; 32] {
+    let mut h = blake3::Hasher::new_derive_key("tether/item/v1");
+    h.update(text.as_bytes());
+    *h.finalize().as_bytes()
 }
 
 /// Domain separation: a signature over an operation can never be confused

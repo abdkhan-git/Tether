@@ -266,6 +266,10 @@ async fn watch_cmd<W: Write>(target: &Target, out: &mut W, count: Option<u32>) -
             }
             Event::DevicesChanged => names = self::names(&devices(&mut c).await?),
             Event::Paused(paused) => writeln!(out, "sync {}", if paused { "paused" } else { "resumed" })?,
+            Event::ItemChanged { author, deleted: true, .. } => {
+                writeln!(out, "an item from {} was deleted", who(&names, &author))?
+            }
+            Event::ItemChanged { .. } => {}
             Event::Lagged { missed } => writeln!(out, "missed {missed} events; run `tether history` to catch up")?,
         }
         out.flush()?;

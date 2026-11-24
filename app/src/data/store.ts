@@ -45,6 +45,12 @@ export interface Backend {
   loadOlder(): Promise<void>;
   /** Open a web or email link in the user's browser or mail app. */
   openLink(url: string): void;
+  /** Turn opening at sign-in on or off; resolves to the setting now in force. */
+  setAutostart(enabled: boolean): Promise<void>;
+  /** Pin or unpin a history item on every device. */
+  setPinned(clipId: string, pinned: boolean): Promise<void>;
+  /** Remove a history item on every device. Final. */
+  deleteItem(clipId: string): Promise<void>;
 }
 
 export interface TetherState {
@@ -60,6 +66,8 @@ export interface TetherState {
   /** UDP port this device's daemon listens on (shown when pairing by address). */
   port: number | null;
   paused: boolean;
+  /** Tether opens at sign-in. Null where that cannot be known (browser preview). */
+  autostart: boolean | null;
   transfers: Transfer[];
   workspaces: Workspace[];
   ops: OpRow[];
@@ -115,6 +123,15 @@ const previewBackend: Backend = {
   openLink(url) {
     window.open(url, "_blank", "noopener,noreferrer");
   },
+  async setAutostart(enabled) {
+    useTether.setState({ autostart: enabled });
+  },
+  async setPinned(clipId, pinned) {
+    useTether.getState().updateClip(clipId, { pinned });
+  },
+  async deleteItem(clipId) {
+    useTether.getState().deleteClip(clipId);
+  },
 };
 
 export const useTether = create<TetherState>((set, get) => ({
@@ -127,6 +144,7 @@ export const useTether = create<TetherState>((set, get) => ({
   historyNext: null,
   port: null,
   paused: false,
+  autostart: null,
   transfers: mock.transfers,
   workspaces: mock.workspaces,
   ops: mock.ops,

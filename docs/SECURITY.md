@@ -305,8 +305,8 @@ Mitigations:
   - The window can show only the bundled page: every navigation elsewhere is refused
     (on_navigation, guard::is_app_url), and new windows (window.open, target=_blank) are
     refused. The native file-drop handler is off.
-  - The page's whole API is eight commands (status, devices, history, pair, join, revoke,
-    set_paused, open_link). build.rs declares them in an app manifest, so Tauri refuses any
+  - The page's whole API is twelve commands (status, devices, history, pair, join, revoke,
+    set_paused, set_pinned, delete_item, open_link, autostart, set_autostart). build.rs declares them in an app manifest, so Tauri refuses any
     command the window's capability (capabilities/main.json) does not grant; the capability
     adds only event listening and setting the window theme, and applies to local content
     only. No file system, shell, HTTP, clipboard or opener plugin is exposed.
@@ -347,6 +347,72 @@ Residual risk the user should know about: the CSP keeps img-src data: for one ve
   texture; links the user clicks open in their browser, where the usual web risks apply;
   the webview itself (WebView2, WKWebView, WebKitGTK) is part of the trusted base and is
   updated by the OS, not by Tether.
+```
+
+### Open at sign-in (P1.6 follow-up)
+
+```
+Feature: a per-user login entry that starts the app hidden in the tray
+  (app/src-tauri/src/login.rs; the autostart / set_autostart commands).
+Capability it needs: none. It writes only the current user's own login entry: the
+  HKCU Run key on Windows, a launch agent on macOS, an XDG autostart file on Linux.
+What an attacker gains if it is abused: code run at every sign-in. A command line with an
+  unquoted path containing a space ("C:\Users\Ann Lee\...\tether-app.exe") makes Windows
+  try C:\Users\Ann.exe first, so whoever can create that file runs at sign-in (CWE-428).
+Who could abuse it: a local program that can write where an unquoted path would resolve;
+  a page trying to turn the entry on behind the user's back.
+Mitigations:
+  - Off until the user turns it on with the switch on the Overview; the page can call only
+    our two commands (the autostart plugin, whose library writes paths unquoted, is not used).
+  - The path is quoted on Windows and in the Linux desktop entry. A Linux path with
+    characters a desktop entry would need to escape (" ` $ \ %, newlines) is refused rather
+    than half-escaped. macOS launch agents take an argument array (no quoting needed).
+  - The entry runs this executable with --hidden and, for a non-default profile, --profile;
+    one entry per profile.
+  - A hidden start does not ask for focus (focusing a window shows it).
+Limits: one entry per profile.
+Test or invariant proving the main property: tether-app login::tests (a path with a space
+  is quoted; refused characters), main::tests (the entry's arguments parse back to a hidden
+  start on the same profile). Checked by hand on Windows: the Run value written, read back
+  and removed; a --hidden launch shows no window.
+Residual risk the user should know about: malware running as the user can rewrite the
+  entry, as it can any per-user setting.
+```
+
+### Pins and deletes (P2.1)
+
+```
+Feature: pin, unpin and delete clipboard items on every device (OpKind::Pin and
+  OpKind::Delete in tether-core; Request::SetPinned / Request::Delete on the control
+  channel; the app's set_pinned and delete_item commands).
+Capability it needs: none new: any active member may pin or delete any item, as it may copy.
+What an attacker gains if it is abused: a compromised member can hide history from every
+  device, or pin junk. Aimed at copies it has not seen yet, it could hide another device's
+  future copies as they arrive.
+Who could abuse it: a compromised paired device; anyone forging operations on the network.
+Mitigations:
+  - Pins and deletes are signed operations like any other: forged, tampered or unknown-author
+    ones are refused (the simulator's adversary injects forged deletes of real items).
+  - Each names its target by (device, seq) and a BLAKE3 hash of the item's text
+    (domain "tether/item/v1"). One whose hash does not match the held item does nothing,
+    so a device cannot aim a delete at a copy it has not seen.
+  - Resolution is a pure function of the operations held (OpLog::marks): a delete is a
+    tombstone and always wins; a pin is last-writer-wins by (HLC time, device, seq). Every
+    device that holds the same operations shows the same history.
+  - Revocation applies as for copies: a revoked device's later pins and deletes are refused.
+  - Deleted items are never delivered to the system clipboard and never sent to the app.
+Limits: those of any operation (MAX_OPS_PER_MESSAGE, peer rate limits).
+Test or invariant proving the main property: tether-core log::tests (delete hides an item
+  even if it arrives first; delete beats a concurrent or later pin; the latest pin wins in
+  any arrival order; a wrong hash does nothing; a revoked device's later delete does not
+  count); tether-sim check_marks (every honest device's deletes and pins equal an oracle
+  rebuilt from what the devices did, under faults, partitions, forged deletes and
+  revocation; 10,000 seeds); control_e2e::pins_and_deletes_reach_every_device. Mutation
+  checks: making the oldest pin win, or letting a pin outrank a delete, fails the simulator.
+Residual risk the user should know about: a delete hides the item; its encrypted operation
+  stays in each device's database until compaction (P2) removes it. A delete is final:
+  there is no undo. A compromised member can still delete everything it has seen, until
+  it is revoked.
 ```
 
 ## Threat model template (one per feature)

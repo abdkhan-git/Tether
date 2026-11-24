@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DaemonClip, DaemonDevice } from "./daemon";
-import { clipOf, devicesOf, fingerprint, mergeClips, nearbyOf, opsOf, withArticle } from "./map";
+import { applyItemChange, clipOf, devicesOf, fingerprint, itemOf, mergeClips, nearbyOf, opsOf, withArticle } from "./map";
 
 const me = "a".repeat(64);
 const peer = "b".repeat(64);
@@ -15,7 +15,7 @@ const list: DaemonDevice[] = [
 ];
 
 function item(author: string, seq: number, at: number, counter = 0, text = `item ${seq}`): DaemonClip {
-  return { author, seq, at, counter, text, held: null };
+  return { author, seq, at, counter, text, held: null, pinned: false };
 }
 
 describe("devices from the daemon", () => {
@@ -61,6 +61,20 @@ describe("history from the daemon", () => {
   it("derives log rows from clipboard operations", () => {
     const [row] = opsOf([clipOf(item(peer, 7, 0x1234, 2))]);
     expect(row).toMatchObject({ device: peer, seq: 7, hlc: "1234.2", kind: "clipboard.text" });
+  });
+
+  it("applies pins and deletes reported by the daemon", () => {
+    const clips = mergeClips([], [item(me, 1, 100), item(peer, 1, 200)].map((i) => clipOf(i)));
+    const pinned = applyItemChange(clips, { author: me, seq: 1, pinned: true, deleted: false });
+    expect(pinned.find((c) => c.id === `${me}:1`)?.pinned).toBe(true);
+    const deleted = applyItemChange(pinned, { author: peer, seq: 1, pinned: false, deleted: true });
+    expect(deleted.map((c) => c.id)).toEqual([`${me}:1`]);
+    expect(clipOf({ ...item(me, 3, 1), pinned: true }).pinned).toBe(true);
+  });
+
+  it("parses clip ids back into daemon item names, and nothing else", () => {
+    expect(itemOf(`${me}:12`)).toEqual({ author: me, seq: 12 });
+    for (const bad of ["c1", `${me}:0`, `${me}:x`, `zz:1`, `${me}:1.5`]) expect(itemOf(bad)).toBeNull();
   });
 
   it("picks the right article for a kind of secret", () => {

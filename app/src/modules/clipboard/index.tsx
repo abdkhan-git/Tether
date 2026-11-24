@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { errorText } from "@/data/daemon";
 import { useTether } from "@/data/store";
 import { heldBecause } from "@/data/map";
 import { newestFirst, type Clip, type Device } from "@/data/types";
@@ -62,10 +63,18 @@ function ClipRow({ clip, device, active, me, onSelect, onCopy }: { clip: Clip; d
 }
 
 function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: Device[] }) {
-  const { updateClip, deleteClip, toast, backend } = useTether();
-  // Pins, deletes and per-item sync choices need merge rules in the log (P2);
-  // until then the desktop app offers only what the daemon does.
-  const editable = !backend.live;
+  const { updateClip, toast, backend } = useTether();
+  // Pin and delete go through the daemon (signed operations, merged on every
+  // device). "Keep on this device" for an item already synced, and pushing to
+  // one device, are not built in the daemon yet: preview only.
+  const previewOnly = !backend.live;
+  const setPinned = () =>
+    backend.setPinned(clip.id, !clip.pinned).catch((e) => toast(clip.pinned ? "Could not unpin" : "Could not pin", errorText(e)));
+  const remove = () =>
+    backend.deleteItem(clip.id).then(
+      () => toast("Removed from every device"),
+      (e) => toast("Could not delete", errorText(e)),
+    );
   const copy = useCopy();
   const [revealed, setRevealed] = useState(false);
   const content = contentOf(clip.text);
@@ -100,20 +109,18 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
         <PrimaryAction icon={icons.copy} onClick={() => copy(clip.text, `Copied to ${thisDevice[os]}`)}>
           Copy to {thisDevice[os]}
         </PrimaryAction>
-        {editable && (
-          <>
-            <IconButton icon={clip.pinned ? icons.pinOff : icons.pin} label={clip.pinned ? "Unpin" : "Pin"} onClick={() => updateClip(clip.id, { pinned: !clip.pinned })} />
-            <IconButton
-              icon={icons.lock}
-              label={clip.sensitive ? "Allow syncing" : "Keep on this device"}
-              onClick={() => {
-                updateClip(clip.id, { sensitive: !clip.sensitive });
-                setRevealed(false);
-              }}
-            />
-          </>
+        <IconButton icon={clip.pinned ? icons.pinOff : icons.pin} label={clip.pinned ? "Unpin everywhere" : "Pin everywhere"} onClick={() => void setPinned()} />
+        {previewOnly && (
+          <IconButton
+            icon={icons.lock}
+            label={clip.sensitive ? "Allow syncing" : "Keep on this device"}
+            onClick={() => {
+              updateClip(clip.id, { sensitive: !clip.sensitive });
+              setRevealed(false);
+            }}
+          />
         )}
-        {editable && !clip.sensitive && peers.length > 0 && (
+        {previewOnly && !clip.sensitive && peers.length > 0 && (
           <div className="ml-2 flex flex-wrap items-center gap-1.5">
             {peers.map((p) => (
               <Button key={p.id} variant="ghost" size="sm" icon={icons.send} onClick={() => toast(`Pushed to ${p.name}`)}>
@@ -122,19 +129,9 @@ function Detail({ clip, device, peers }: { clip: Clip; device?: Device; peers: D
             ))}
           </div>
         )}
-        {editable && (
-          <div className="ml-auto">
-            <IconButton
-              icon={icons.trash}
-              label="Delete everywhere"
-              tone="danger"
-              onClick={() => {
-                deleteClip(clip.id);
-                toast("Removed from every device");
-              }}
-            />
-          </div>
-        )}
+        <div className="ml-auto">
+          <IconButton icon={icons.trash} label="Delete everywhere" tone="danger" onClick={() => void remove()} />
+        </div>
       </div>
     </Card>
   );
@@ -156,6 +153,7 @@ function ClipboardView() {
   const filters: { value: Filter; label: string }[] = backend.live
     ? [
         { value: "all", label: "All" },
+        { value: "pinned", label: "Pinned" },
         { value: "mine", label: "This device" },
         { value: "held", label: "Held" },
       ]
