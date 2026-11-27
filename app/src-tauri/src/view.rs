@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use tether_core::content::HoldReason;
 use tether_core::pairing::is_valid_code;
+use tether_core::pulse::Liveness;
 use tether_core::{DeviceId, Timestamp};
 use tether_ipc as ipc;
 
@@ -57,6 +58,64 @@ pub struct Device {
     pub state: &'static str,
     pub rtt_ms: Option<f64>,
     pub ops: u64,
+    pub pulse: Option<PulseView>,
+}
+
+/// A device's health as the page shows it. Adapter addresses stay in the daemon.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PulseView {
+    pub health: Option<HealthView>,
+    pub heard_ms_ago: Option<u64>,
+    /// "live", "suspect" or "down" for a connected device.
+    pub liveness: Option<&'static str>,
+    pub wakeable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthView {
+    /// Percent, one decimal.
+    pub cpu: f64,
+    pub mem_used: u64,
+    pub mem_total: u64,
+    pub disk_free: u64,
+    pub disk_total: u64,
+    pub battery: Option<BatteryView>,
+    pub uptime_s: u64,
+    pub os: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BatteryView {
+    pub percent: u8,
+    pub charging: bool,
+}
+
+impl From<ipc::DevicePulse> for PulseView {
+    fn from(p: ipc::DevicePulse) -> Self {
+        Self {
+            health: p.health.map(|h| HealthView {
+                cpu: f64::from(h.cpu_permille) / 10.0,
+                mem_used: h.mem_used,
+                mem_total: h.mem_total,
+                disk_free: h.disk_free,
+                disk_total: h.disk_total,
+                battery: h.battery.map(|b| BatteryView { percent: b.percent, charging: b.charging }),
+                uptime_s: h.uptime_s,
+                os: h.os,
+                version: h.version,
+            }),
+            heard_ms_ago: p.heard_ms_ago,
+            liveness: p.liveness.map(|l| match l {
+                Liveness::Live => "live",
+                Liveness::Suspect => "suspect",
+                Liveness::Down => "down",
+            }),
+            wakeable: p.wakeable,
+        }
+    }
 }
 
 impl From<ipc::Device> for Device {
@@ -68,7 +127,14 @@ impl From<ipc::Device> for Device {
             ipc::DeviceState::Revoked => "revoked",
             ipc::DeviceState::Nearby => "nearby",
         };
-        Self { id: d.id.to_hex(), name: d.name, state, rtt_ms: d.rtt_us.map(|us| f64::from(us) / 1000.0), ops: d.ops }
+        Self {
+            id: d.id.to_hex(),
+            name: d.name,
+            state,
+            rtt_ms: d.rtt_us.map(|us| f64::from(us) / 1000.0),
+            ops: d.ops,
+            pulse: d.pulse.map(PulseView::from),
+        }
     }
 }
 
@@ -196,6 +262,12 @@ pub enum Event {
         editor: Option<String>,
         n: u64,
     },
+    /// A device is running out of disk space.
+    LowStorage {
+        device: String,
+        free: u64,
+        total: u64,
+    },
     /// An edit from here changed nothing (it was already so).
     NoteNoop {
         note: String,
@@ -220,6 +292,9 @@ impl From<ipc::Event> for Event {
                 Event::Received { from: from.to_hex(), author: author.to_hex(), seq, held }
             }
             ipc::Event::NotesChanged => Event::NotesChanged,
+            ipc::Event::LowStorage { device, free, total } => {
+                Event::LowStorage { device: device.to_hex(), free, total }
+            }
             ipc::Event::NotePatch { note, from, to, change, by } => Event::NotePatch {
                 note: note_id(note),
                 from,

@@ -95,7 +95,8 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
                 s.names.get(id).cloned().unwrap_or_else(|| crate::ctx::clean_name(added_as))
             };
             let rtt_us = s.peers.get(id).map(|c| u32::try_from(c.rtt().as_micros()).unwrap_or(u32::MAX));
-            Device { id: *id, name, state, rtt_us, ops: s.log.ops_from(*id).len() as u64 }
+            let pulse = Ctx::device_pulse(&s, *id, s.peers.contains_key(id));
+            Device { id: *id, name, state, rtt_us, ops: s.log.ops_from(*id).len() as u64, pulse }
         })
         .collect();
     out.sort_by_key(|d| d.state != DeviceState::ThisDevice);
@@ -105,6 +106,7 @@ pub fn devices(ctx: &Ctx) -> Vec<Device> {
         state: DeviceState::Nearby,
         rtt_us: None,
         ops: 0,
+        pulse: None,
     }));
     out
 }

@@ -112,6 +112,10 @@ async fn run_session(ctx: Ctx, _endpoint: Endpoint, conn: Connection, peer: teth
     }
     ctx.emit(tether_ipc::Event::DevicesChanged);
 
+    // Heartbeats both ways, for as long as the connection lasts (pulse.rs).
+    tokio::spawn(crate::pulse::beat_loop(ctx.clone(), conn.clone()));
+    tokio::spawn(crate::pulse::listen_loop(ctx.clone(), conn.clone(), peer));
+
     // Catch up on anything missed while apart.
     {
         let (ctx, conn) = (ctx.clone(), conn.clone());
@@ -155,6 +159,7 @@ async fn run_session(ctx: Ctx, _endpoint: Endpoint, conn: Connection, peer: teth
         s.peers.get(&peer).is_some_and(|c| c.stable_id() == id) && s.peers.remove(&peer).is_some()
     };
     if removed {
+        ctx.pulse_gone(peer);
         ctx.emit(tether_ipc::Event::DevicesChanged);
     }
 }

@@ -602,6 +602,53 @@ Residual risk the user should know about: deleting text from a note does not rem
   pauses the clipboard, not notes.
 ```
 
+### Pulse: heartbeats, device health and wake-up (P3, F10)
+
+```
+Feature: every connected device sends a heartbeat every 2 s as a QUIC datagram carrying its
+  health (CPU, memory, home-disk space, battery, uptime, OS name, Tether version, and the
+  hardware addresses of adapters on a private network); a phi-accrual failure detector reads
+  the arrival times; the Devices page shows it and can wake a sleeping device with a
+  Wake-on-LAN packet (crates/tether-core/src/pulse.rs, tether-os health.rs, daemon pulse.rs).
+Capability it needs: none new; health is shared only with members, as clipboard items are.
+  Waking is a local user action on this device.
+What an attacker gains if it is abused: activity tracking (when each machine is on, how
+  busy); a flood of datagrams to burn CPU; a wake packet aimed at a machine that is not the
+  user's; false health shown on a card; a "low storage" scare.
+Who could abuse it: someone on the network; a compromised member; a local client.
+Mitigations:
+  - Beats ride the existing mutually authenticated QUIC connection (nothing is sent to or
+    accepted from a stranger), and are taken only from active members.
+  - Never stored or put in the log; health is kept in memory, latest value only. What is
+    saved (sealed in the database) is how to wake each member: its adapter addresses and
+    when it was last heard from.
+  - Strict decoding: at most 1 KiB, exact postcard, every value within limits (CPU <= 100 %,
+    used <= total, battery <= 100 %, at most 4 addresses, OS name 48 bytes, cleaned).
+  - A peer's beats beyond 4 a second are dropped; the datagram buffer is 64 KiB.
+  - Health is display only: nothing is decided from it except where to send a wake packet.
+  - Wake: only for an active member, only to addresses that device reported about itself
+    over its authenticated connection (zero, broadcast, multicast and locally administered
+    addresses are dropped), at most once per 5 s per device, sent as a LAN broadcast to
+    ports 9 and 7. A wake packet carries no data and cannot do anything but power a machine
+    on; a lying member can at most wake some other machine on the user's LAN.
+  - Health values never reach a log file (checked in pulse_e2e).
+  - Sampling is cheap and adaptive: every 2 s only while someone has the Devices page open
+    (on any device), every 30 s otherwise.
+Limits: as above.
+Test or invariant proving the main property: tether-core pulse tests (decoder property-fuzzed
+  on hostile bytes; limits; phi never decreases with silence, never NaN; regular beats stay
+  live and a stopped device is called down within 10 s; magic packet layout; which addresses
+  are wakeable); daemon pulse::tests (strangers' beats ignored, floods and junk dropped, low
+  storage told once a day, waking only for members with an address and not too often, the
+  wake book survives a restart, this device's own reading is clamped and cleaned);
+  tests/pulse_e2e.rs (two real daemons see each other's health; a killed peer is called down
+  in 7.6 s, before the 15 s QUIC idle timeout); app notify tests.
+Residual risk the user should know about: every member sees every member's health and when it
+  is on. Wake-on-LAN must be enabled on the sleeping machine's adapter (often only for wired
+  Ethernet), and works only on the same network. Battery is not read on macOS yet; macOS and
+  Linux readings are unverified on real machines.
+```
+
 ## Threat model template (one per feature)
 
 ```

@@ -21,6 +21,8 @@
     "allow-palette-shortcut",
     "allow-scratchpad-shortcut",
     "allow-show-scratchpad",
+    "allow-watch-devices",
+    "allow-wake-device",
     "allow-notes",
     "allow-note-create",
     "allow-note-open",

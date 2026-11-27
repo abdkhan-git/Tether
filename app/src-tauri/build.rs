@@ -18,6 +18,8 @@ const COMMANDS: &[&str] = &[
     "palette_shortcut",
     "scratchpad_shortcut",
     "show_scratchpad",
+    "watch_devices",
+    "wake_device",
     "notes",
     "note_create",
     "note_open",

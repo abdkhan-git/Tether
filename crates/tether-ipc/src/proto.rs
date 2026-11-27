@@ -8,10 +8,11 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use tether_core::content::HoldReason;
 use tether_core::notes::{Span, TextChange};
+use tether_core::pulse::{Health, Liveness};
 use tether_core::{Delta, DeviceId, NoteRef, NoteRevision, Timestamp};
 
 /// Bumped on any change to the messages below; both ends must match.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Largest request a client may send (a paste that fills a note: 256 KiB of text).
 pub const MAX_REQUEST_BYTES: usize = 320 << 10;
 /// Largest reply or event the daemon sends (one clipboard item can be 1 MiB).
@@ -114,6 +115,13 @@ pub enum Request {
         at: Timestamp,
         author: DeviceId,
     },
+    /// Someone is looking at this device's devices: for the next few seconds,
+    /// every device samples its health often. Repeat while still looking.
+    Watch,
+    /// Send a Wake-on-LAN packet to a device that is asleep or switched off.
+    Wake {
+        device: DeviceId,
+    },
     /// Turn this connection into a stream of [`Event`]s.
     Subscribe,
 }
@@ -185,6 +193,11 @@ pub enum Reply {
     Renamed,
     Sent,
     Copied,
+    Watching,
+    /// Wake packets went to this many adapter addresses.
+    Woken {
+        adapters: u32,
+    },
     Notes(Vec<NoteSummary>),
     NoteCreated {
         note: NoteRef,
@@ -236,6 +249,23 @@ pub struct Device {
     pub rtt_us: Option<u32>,
     /// Operations this device holds from it (its entry in the version vector).
     pub ops: u64,
+    /// How it is doing (Pulse), if it has said.
+    pub pulse: Option<DevicePulse>,
+}
+
+/// A device's health, and what the failure detector makes of its silence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevicePulse {
+    /// The latest it reported (this device: the latest sample). `None` for a
+    /// device not heard from since this daemon started.
+    pub health: Option<Health>,
+    /// Milliseconds since it was last heard from; `None` if never.
+    pub heard_ms_ago: Option<u64>,
+    /// For a connected device, what its beats say; `None` for this device or
+    /// one not connected.
+    pub liveness: Option<Liveness>,
+    /// A wake packet can be sent: it has reported an adapter address.
+    pub wakeable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,6 +352,8 @@ pub enum Event {
     /// An editor's edit was recorded but changed nothing (another device had
     /// already deleted what it deletes).
     NoteNoop { note: NoteRef, by: (EditorId, u64) },
+    /// A device is running out of disk space (told at most once a day per device).
+    LowStorage { device: DeviceId, free: u64, total: u64 },
     /// This subscriber fell behind and missed events; refresh everything.
     Lagged { missed: u64 },
 }

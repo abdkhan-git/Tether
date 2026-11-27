@@ -33,6 +33,28 @@ export interface DaemonDevice {
   state: DeviceState;
   rttMs: number | null;
   ops: number;
+  /** Pulse: absent from older daemons and for devices never heard from. */
+  pulse?: DaemonPulse | null;
+}
+
+export interface DaemonHealth {
+  /** Percent of all cores. */
+  cpu: number;
+  memUsed: number;
+  memTotal: number;
+  diskFree: number;
+  diskTotal: number;
+  battery: { percent: number; charging: boolean } | null;
+  uptimeS: number;
+  os: string;
+  version: string;
+}
+
+export interface DaemonPulse {
+  health: DaemonHealth | null;
+  heardMsAgo: number | null;
+  liveness: "live" | "suspect" | "down" | null;
+  wakeable: boolean;
 }
 
 export interface Cursor {
@@ -96,6 +118,7 @@ export type DaemonEvent =
   | { type: "itemChanged"; author: string; seq: number; pinned: boolean; deleted: boolean }
   | { type: "received"; from: string; author: string; seq: number; held: boolean }
   | { type: "notesChanged" }
+  | { type: "lowStorage"; device: string; free: number; total: number }
   | { type: "notePatch"; note: string; from: number; to: number; delta: Delta; authors: Span[]; editor: string | null; n: number }
   | { type: "noteNoop"; note: string; editor: string; n: number }
   | { type: "lagged" };
@@ -128,6 +151,8 @@ export const daemon = {
   scratchEdit: (edit: EditRequest) => invoke<EditResult>("scratch_edit", { edit }),
   scratchpadShortcut: () => invoke<string | null>("scratchpad_shortcut"),
   showScratchpad: () => invoke<void>("show_scratchpad"),
+  watchDevices: () => invoke<void>("watch_devices"),
+  wakeDevice: (device: string) => invoke<number>("wake_device", { device }),
   onScratchpadOpen: (f: () => void): Promise<UnlistenFn> => listen("scratchpad://open", () => f()),
   autostart: () => invoke<boolean>("autostart"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),

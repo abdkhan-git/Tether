@@ -7,11 +7,22 @@ const m = (n: number) => now - n * 60_000;
 
 export const ME = "d-studio";
 
+const GB = 1e9;
+
 export const devices: Device[] = [
-  { id: ME, name: defaultDeviceName[os], platform: os, connection: "lan", latencyMs: 0, lastSeen: now, isMe: true, seq: 214, fingerprint: "7f3a·c91e·02bd·58a4" },
-  { id: "d-mbp", name: os === "macos" ? "Mac mini" : "MacBook Pro", platform: "macos", connection: "lan", latencyMs: 1.6, lastSeen: now, isMe: false, seq: 188, fingerprint: "b40d·19ee·7a63·c0f2" },
-  { id: "d-nuc", name: "Linux box", platform: "linux", connection: "direct", latencyMs: 38, lastSeen: m(3), isMe: false, seq: 96, fingerprint: "2c88·e5f1·4d07·93ab" },
-  { id: "d-lap", name: "Old ThinkPad", platform: "windows", connection: "offline", latencyMs: null, lastSeen: m(60 * 26), isMe: false, seq: 41, fingerprint: "91ce·3b72·ad10·66e8" },
+  {
+    id: ME, name: defaultDeviceName[os], platform: os, connection: "lan", latencyMs: 0, lastSeen: now, isMe: true, seq: 214, fingerprint: "7f3a·c91e·02bd·58a4",
+    health: { cpu: 14.2, memUsed: 11.8 * GB, memTotal: 32 * GB, diskFree: 412 * GB, diskTotal: 1000 * GB, battery: null, uptimeS: 3 * 86400 + 4 * 3600, os: "Windows 11 Pro", version: "0.1.0" },
+  },
+  {
+    id: "d-mbp", name: os === "macos" ? "Mac mini" : "MacBook Pro", platform: "macos", connection: "lan", latencyMs: 1.6, lastSeen: now, isMe: false, seq: 188, fingerprint: "b40d·19ee·7a63·c0f2", liveness: "live",
+    health: { cpu: 31.5, memUsed: 12.1 * GB, memTotal: 16 * GB, diskFree: 38 * GB, diskTotal: 512 * GB, battery: { percent: 64, charging: false }, uptimeS: 9 * 3600, os: "macOS 15.2", version: "0.1.0" },
+  },
+  {
+    id: "d-nuc", name: "Linux box", platform: "linux", connection: "direct", latencyMs: 38, lastSeen: m(3), isMe: false, seq: 96, fingerprint: "2c88·e5f1·4d07·93ab", liveness: "suspect",
+    health: { cpu: 87.3, memUsed: 6.2 * GB, memTotal: 8 * GB, diskFree: 3.1 * GB, diskTotal: 256 * GB, battery: null, uptimeS: 41 * 86400, os: "Ubuntu 24.04", version: "0.1.0" },
+  },
+  { id: "d-lap", name: "Old ThinkPad", platform: "windows", connection: "offline", latencyMs: null, lastSeen: m(60 * 26), isMe: false, seq: 41, fingerprint: "91ce·3b72·ad10·66e8", wakeable: true, health: null },
 ];
 
 /** base64url, so the sample JWT is built rather than pasted. */

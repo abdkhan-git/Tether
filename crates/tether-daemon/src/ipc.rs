@@ -125,6 +125,11 @@ async fn handle(ctx: &Ctx, quic: &quinn::Endpoint, request: Request) -> Result<R
             api::delete(ctx, (author, seq))?;
             Reply::Marked
         }
+        Request::Watch => {
+            ctx.watch();
+            Reply::Watching
+        }
+        Request::Wake { device } => Reply::Woken { adapters: ctx.wake(device)? },
         Request::Notes => Reply::Notes(ctx.notes()),
         Request::NoteCreate { title, notebook } => {
             let (note, ops) = ctx.note_create(&title, &notebook)?;

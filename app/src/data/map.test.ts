@@ -34,6 +34,19 @@ describe("devices from the daemon", () => {
     expect(later).toMatchObject({ connection: "offline", latencyMs: null, lastSeen: 1000 });
   });
 
+  it("reads each device's health, its OS from its heartbeats, and whether it can be woken", () => {
+    const health = { cpu: 12.5, memUsed: 4, memTotal: 16, diskFree: 100, diskTotal: 500, battery: null, uptimeS: 60, os: "Windows 11 Pro", version: "0.1.0" };
+    const withPulse: DaemonDevice[] = [
+      { ...list[0], pulse: { health, heardMsAgo: 400, liveness: "suspect", wakeable: true } },
+      { ...list[1], pulse: { health: { ...health, os: "macOS 15.2" }, heardMsAgo: 0, liveness: null, wakeable: false } },
+      { id: gone, name: "Asleep", state: "offline", rttMs: null, ops: 4, pulse: { health: null, heardMsAgo: 3_600_000, liveness: null, wakeable: true } },
+    ];
+    const [mine, laptop, asleep] = devicesOf(withPulse, "windows", [], 10_000_000);
+    expect(mine.platform).toBe("windows");
+    expect(laptop).toMatchObject({ platform: "windows", liveness: "suspect", wakeable: false, health: { cpu: 12.5 } });
+    expect(asleep).toMatchObject({ connection: "offline", lastSeen: 6_400_000, wakeable: true, liveness: null, platform: null });
+  });
+
   it("names unnamed devices by their key, and lists nearby strangers apart", () => {
     expect(nearbyOf(list)).toEqual([{ id: stranger, name: stranger.slice(0, 12) }]);
     expect(fingerprint("0123456789abcdef" + "0".repeat(48))).toBe("0123·4567·89ab·cdef");

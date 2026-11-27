@@ -35,7 +35,13 @@ function Node({ device, innerRef, hub }: { device: Device; innerRef: RefObject<H
       <div className="text-center leading-tight whitespace-nowrap">
         <div className={cn("text-[13px] font-medium", offline && "text-subtle")}>{hub ? "This device" : device.name}</div>
         <div className="mt-0.5 font-mono text-[11px] text-subtle">
-          {hub ? device.name : offline ? "offline" : device.latencyMs !== null ? `${device.latencyMs.toFixed(1)} ms` : "connected"}
+          {hub
+            ? device.name
+            : offline
+              ? "offline"
+              : device.liveness === "down"
+                ? "not responding"
+                : [device.latencyMs !== null ? `${device.latencyMs.toFixed(1)} ms` : "connected", device.health ? `CPU ${Math.round(device.health.cpu)}%` : null].filter(Boolean).join(" · ")}
         </div>
       </div>
     </div>

@@ -172,6 +172,8 @@ pub struct Loaded {
     /// as paused: failing closed keeps copies on this device until the user
     /// resumes.
     pub paused: bool,
+    /// How to wake the other devices (Pulse), as `pulse.rs` saved it.
+    pub wake_book: Option<Vec<u8>>,
 }
 
 impl Store {
@@ -199,7 +201,28 @@ impl Store {
                 true
             }
         };
-        Ok(Loaded { store, root, ops, dropped, imported, set_aside, paused })
+        let wake_book = store.load_meta("wake")?;
+        Ok(Loaded { store, root, ops, dropped, imported, set_aside, paused, wake_book })
+    }
+
+    /// A sealed value from `meta`, if there is one that opens.
+    fn load_meta(&self, name: &'static str) -> Result<Option<Vec<u8>>> {
+        let sealed: Option<Vec<u8>> =
+            self.conn.query_row("SELECT sealed FROM meta WHERE name = ?1", [name], |r| r.get(0)).optional()?;
+        Ok(sealed.and_then(|sealed| self.sealer.open(Slot::Meta(name), &sealed).map(|v| v.to_vec())))
+    }
+
+    /// Save how to wake the other devices (their adapters' addresses).
+    pub fn set_wake_book(&mut self, bytes: &[u8]) -> Result<()> {
+        let sealed = self.sealer.seal(Slot::Meta("wake"), bytes)?;
+        self.conn
+            .execute(
+                "INSERT INTO meta (name, sealed) VALUES ('wake', ?1)
+                 ON CONFLICT (name) DO UPDATE SET sealed = excluded.sealed",
+                [sealed],
+            )
+            .context("saving how to wake devices")?;
+        Ok(())
     }
 
     /// The saved pause flag: `Some(false)` if none was saved, `None` if it is unreadable.

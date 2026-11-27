@@ -14,6 +14,7 @@ mod keystore;
 mod net;
 mod notes;
 mod pair;
+mod pulse;
 mod store;
 mod tls;
 
@@ -109,6 +110,7 @@ async fn main() -> Result<()> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let mut log = OpLog::new(key.clone());
     let paused = loaded.as_ref().is_some_and(|l| l.paused);
+    let wake_book = loaded.as_ref().and_then(|l| l.wake_book.clone());
     let store = match loaded {
         Some(l) => {
             if let Some(aside) = &l.set_aside {
@@ -150,6 +152,9 @@ async fn main() -> Result<()> {
     };
     let gate = Arc::new(RwLock::new(Gate::default()));
     let ctx = Ctx::new(log, args.name.clone(), store, gate, tls_id, clock, deliver);
+    if let Some(book) = wake_book {
+        ctx.lock().pulse.load_book(&book);
+    }
     if paused {
         ctx.lock().paused = true;
         info!("sync is paused on this device: copies stay here until it is resumed");
@@ -198,6 +203,7 @@ async fn main() -> Result<()> {
         tokio::spawn(ipc::serve(listener, token, ctx.clone(), endpoint.clone()));
     }
     tokio::spawn(net::accept_loop(ctx.clone(), endpoint.clone()));
+    tokio::spawn(pulse::sample_loop(ctx.clone()));
     tokio::spawn(net::reconnect_loop(ctx.clone(), endpoint.clone(), args.peer.clone()));
     let _mdns = if args.no_mdns { None } else { Some(discovery::start(ctx.clone(), port)?) };
 

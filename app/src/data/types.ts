@@ -21,6 +21,25 @@ export interface Device {
   seq: number;
   /** The start of the device's public key, grouped for reading aloud. */
   fingerprint: string;
+  /** How it is doing, as it last reported (Pulse). */
+  health?: Health | null;
+  /** What its heartbeats say, while connected. */
+  liveness?: "live" | "suspect" | "down" | null;
+  /** A wake-up packet can be sent to it. */
+  wakeable?: boolean;
+}
+
+export interface Health {
+  /** Percent of all cores. */
+  cpu: number;
+  memUsed: number;
+  memTotal: number;
+  diskFree: number;
+  diskTotal: number;
+  battery: { percent: number; charging: boolean } | null;
+  uptimeS: number;
+  os: string;
+  version: string;
 }
 
 /** Why a copy from another device was kept off the system clipboard. */

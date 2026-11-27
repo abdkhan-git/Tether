@@ -82,6 +82,11 @@ function onEvent(e: DaemonEvent) {
         e.held ? "It looks like a command, so it is held in history and not on your clipboard." : "It is on your clipboard, ready to paste.",
       );
       break;
+    case "lowStorage": {
+      const gb = (b: number) => `${Math.round(b / 1e9)} GB`;
+      s.toast(`Low storage on ${e.device === s.me ? "this device" : nameOf(e.device)}`, `${gb(e.free)} free of ${gb(e.total)}.`);
+      break;
+    }
     case "notesChanged":
       useNotes.getState().changed();
       break;
@@ -146,6 +151,8 @@ const liveBackend: Backend = {
     if (!item) throw new Error("That item is not in history");
     await daemon.copyHere(item.author, item.seq);
   },
+  watchDevices: () => daemon.watchDevices(),
+  wakeDevice: (id) => daemon.wakeDevice(id),
   async sendItem(clipId, to) {
     const item = itemOf(clipId);
     if (!item) throw new Error("That item is not in history");

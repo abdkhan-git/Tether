@@ -20,6 +20,7 @@ pub mod log;
 pub mod notes;
 pub mod op;
 pub mod pairing;
+pub mod pulse;
 pub mod wire;
 
 pub use clock::{Clock, SystemClock};

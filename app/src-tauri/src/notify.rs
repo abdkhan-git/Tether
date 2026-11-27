@@ -107,6 +107,23 @@ pub fn for_send(from_device: tether_core::DeviceId, held: bool, cx: &Context<'_>
     })
 }
 
+/// The notification when a device is running out of disk space (the daemon
+/// says so at most once a day per device). Shown even while the window is in
+/// front: it is rare and worth acting on.
+pub fn for_low_storage(
+    device: tether_core::DeviceId,
+    free: u64,
+    total: u64,
+    cx: &Context<'_>,
+) -> Option<(String, String)> {
+    if !cx.enabled {
+        return None;
+    }
+    let gb = |b: u64| b as f64 / 1e9;
+    let place = if device == cx.me { "this computer".to_string() } else { clean(cx.from) };
+    Some((format!("Low storage on {place}"), format!("{:.0} GB free of {:.0} GB.", gb(free), gb(total))))
+}
+
 /// A peer-chosen name, safe for a notification: no control or direction
 /// characters, bounded.
 fn clean(name: &str) -> String {
@@ -176,6 +193,21 @@ mod tests {
         assert!(for_copy(&peer, &Context { paused: true, ..cx("Laptop") }).is_none());
         assert!(for_copy(&peer, &Context { window_focused: true, ..cx("Laptop") }).is_none());
         assert!(for_copy(&peer, &Context { enabled: false, ..cx("Laptop") }).is_none());
+    }
+
+    #[test]
+    fn low_storage_names_the_device_and_the_space_left() {
+        let laptop = DeviceKey::for_test(2).id();
+        let (title, body) = for_low_storage(laptop, 3_000_000_000, 512_000_000_000, &cx("Laptop\u{1b}[31m")).unwrap();
+        assert_eq!(title, "Low storage on Laptop[31m");
+        assert_eq!(body, "3 GB free of 512 GB.");
+        let me = DeviceKey::for_test(1).id();
+        assert_eq!(for_low_storage(me, 1, 2, &cx("Desk")).unwrap().0, "Low storage on this computer");
+        assert!(for_low_storage(laptop, 1, 2, &Context { enabled: false, ..cx("Laptop") }).is_none());
+        assert!(
+            for_low_storage(laptop, 1, 2, &Context { window_focused: true, ..cx("Laptop") }).is_some(),
+            "rare enough to show anyway"
+        );
     }
 
     #[test]

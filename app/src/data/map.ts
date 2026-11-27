@@ -4,7 +4,7 @@
 import { contentOf } from "@/lib/content/detect";
 import type { OS } from "@/lib/platform";
 import type { DaemonClip, DaemonDevice } from "./daemon";
-import { newestFirst, type Clip, type Device, type OpRow } from "./types";
+import { newestFirst, type Clip, type Device, type OpRow, type Platform } from "./types";
 
 /** The start of a device key in four groups of four, for comparing by eye or aloud. */
 export function fingerprint(id: string): string {
@@ -14,6 +14,14 @@ export function fingerprint(id: string): string {
 /** A short stand-in when a device has not told us its name. */
 export function shortId(id: string): string {
   return id.slice(0, 12);
+}
+
+/** The platform an OS name reported by a device belongs to. */
+export function platformOf(os: string | undefined): Platform | null {
+  if (!os) return null;
+  if (/windows/i.test(os)) return "windows";
+  if (/mac ?os|darwin|os x/i.test(os)) return "macos";
+  return "linux";
 }
 
 /**
@@ -27,16 +35,22 @@ export function devicesOf(list: DaemonDevice[], thisOs: OS, previous: Device[], 
     .map((d) => {
       const isMe = d.state === "thisDevice";
       const connected = isMe || d.state === "connected";
+      const pulse = d.pulse ?? null;
+      const heard = pulse?.heardMsAgo != null ? now - pulse.heardMsAgo : null;
       return {
         id: d.id,
         name: d.name.trim() || shortId(d.id),
-        platform: isMe ? thisOs : null,
+        // Other devices say which OS they run in their heartbeats.
+        platform: isMe ? thisOs : platformOf(pulse?.health?.os),
         connection: connected ? "lan" : "offline",
         latencyMs: isMe ? 0 : connected ? d.rttMs : null,
-        lastSeen: connected ? now : (before.get(d.id)?.lastSeen ?? null),
+        lastSeen: connected ? now : (heard ?? before.get(d.id)?.lastSeen ?? null),
         isMe,
         seq: d.ops,
         fingerprint: fingerprint(d.id),
+        health: pulse?.health ?? null,
+        liveness: connected && !isMe ? (pulse?.liveness ?? null) : null,
+        wakeable: !connected && !!pulse?.wakeable,
       } satisfies Device;
     })
     .sort((a, b) => Number(b.isMe) - Number(a.isMe));

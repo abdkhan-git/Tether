@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 
 use crate::api;
 use crate::notes::NoteCache;
+use crate::pulse::PulseState;
 use crate::store::Store;
 use crate::tls::{SharedGate, TlsIdentity};
 
@@ -85,6 +86,8 @@ pub struct State {
     pub paused: bool,
     /// Notes open in an editor here (`notes.rs`).
     pub notes: NoteCache,
+    /// Heartbeats and health (`pulse.rs`).
+    pub pulse: PulseState,
     store: Option<Store>,
 }
 
@@ -151,6 +154,7 @@ impl Ctx {
             pinned: HashSet::new(),
             paused: false,
             notes: NoteCache::new(),
+            pulse: PulseState::new(),
             store,
         };
         let (events, _) = broadcast::channel(EVENT_QUEUE);
@@ -213,6 +217,15 @@ impl Ctx {
         if let (Some(store), false) = (s.store.as_mut(), ops.is_empty()) {
             if let Err(e) = store.append_all(ops) {
                 error!(error = %e, "could not persist operations; they will be re-fetched from peers");
+            }
+        }
+    }
+
+    /// Save how to wake the other devices (Pulse).
+    pub(crate) fn save_wake_book(s: &mut State, bytes: &[u8]) {
+        if let Some(store) = s.store.as_mut() {
+            if let Err(e) = store.set_wake_book(bytes) {
+                warn!(error = %e, "could not save how to wake devices");
             }
         }
     }

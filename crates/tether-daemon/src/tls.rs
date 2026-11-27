@@ -278,6 +278,9 @@ pub fn transport() -> Arc<TransportConfig> {
     t.stream_receive_window(VarInt::from_u32((MAX_FRAME + 64 * 1024) as u32));
     t.receive_window(VarInt::from_u32(16 << 20));
     t.send_window(16 << 20);
+    // Heartbeats (pulse.rs) are datagrams: a few small ones a second.
+    t.datagram_receive_buffer_size(Some(64 << 10));
+    t.datagram_send_buffer_size(64 << 10);
     Arc::new(t)
 }
 

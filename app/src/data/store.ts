@@ -59,6 +59,10 @@ export interface Backend {
   sendItem(clipId: string, to: string): Promise<void>;
   /** Put a history item on this device's clipboard (not recorded again as a new copy). */
   copyHere(clip: Clip): Promise<void>;
+  /** Someone is looking at devices: health is sampled often for a few seconds. */
+  watchDevices(): Promise<void>;
+  /** Send a wake-up packet to a sleeping device; resolves to the adapters tried. */
+  wakeDevice(id: string): Promise<number>;
 }
 
 export interface TetherState {
@@ -155,6 +159,10 @@ const previewBackend: Backend = {
   async sendItem() {},
   async copyHere(clip) {
     await navigator.clipboard.writeText(clip.text);
+  },
+  async watchDevices() {},
+  async wakeDevice() {
+    return 1;
   },
 };
 
@@ -309,11 +317,13 @@ export function startMockDaemon(): () => void {
         const bytesDone = Math.min(t.size, t.bytesDone + speed / 2);
         return bytesDone >= t.size ? { ...t, bytesDone, speed: 0, state: "done", updated: Date.now() } : { ...t, bytesDone, speed };
       }),
-      devices: !sampleLatency ? s.devices : s.devices.map((d) =>
-        d.connection === "offline" || d.isMe || d.latencyMs === null
-          ? d
-          : { ...d, latencyMs: wobbleLatency(d), lastSeen: Date.now() },
-      ),
+      devices: !sampleLatency
+        ? s.devices
+        : s.devices.map((d) => {
+            if (d.connection === "offline") return d;
+            const health = d.health && { ...d.health, cpu: Math.max(1, Math.min(99, +(d.health.cpu + (Math.random() - 0.5) * 6).toFixed(1))) };
+            return d.isMe || d.latencyMs === null ? { ...d, health } : { ...d, health, latencyMs: wobbleLatency(d), lastSeen: Date.now() };
+          }),
     }));
   }, 500);
 

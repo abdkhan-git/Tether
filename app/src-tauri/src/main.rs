@@ -179,6 +179,25 @@ async fn set_paused(link: State<'_, Arc<Link>>, paused: bool) -> Res<bool> {
     }
 }
 
+/// Someone is looking at devices: every device sends its health often for a
+/// few seconds. The Devices page repeats it while it is open.
+#[tauri::command]
+async fn watch_devices(link: State<'_, Arc<Link>>) -> Res<()> {
+    match link.call(Request::Watch, true).await? {
+        Reply::Watching => Ok(()),
+        r => Err(unexpected(r)),
+    }
+}
+
+/// Send a Wake-on-LAN packet to a device that is asleep or switched off.
+#[tauri::command]
+async fn wake_device(link: State<'_, Arc<Link>>, device: String) -> Res<u32> {
+    match link.call(Request::Wake { device: view::device_id(&device)? }, false).await? {
+        Reply::Woken { adapters } => Ok(adapters),
+        r => Err(unexpected(r)),
+    }
+}
+
 /// Open a web or email link in the user's own browser or mail app. Only on
 /// a click in the page (a local user action), and only links `guard` accepts.
 #[tauri::command]
@@ -237,6 +256,8 @@ enum Notice {
     Copy(tether_ipc::HistoryItem),
     /// Another device sent this one an item.
     Send { from: tether_core::DeviceId, held: bool },
+    /// A device is running out of disk space.
+    LowStorage { device: tether_core::DeviceId, free: u64, total: u64 },
 }
 
 /// Show a notification for `notice` if `notify` says so.
@@ -253,6 +274,7 @@ fn notify_event(app: &AppHandle, notice: Notice) {
         let sender = match &notice {
             Notice::Copy(item) => item.author,
             Notice::Send { from, .. } => *from,
+            Notice::LowStorage { device, .. } => *device,
         };
         let from = match link.call(Request::Devices, true).await {
             Ok(Reply::Devices(list)) => list.into_iter().find(|d| d.id == sender).map(|d| d.name),
@@ -266,6 +288,7 @@ fn notify_event(app: &AppHandle, notice: Notice) {
         let shown = match &notice {
             Notice::Copy(item) => notify::for_copy(item, &cx),
             Notice::Send { from, held } => notify::for_send(*from, *held, &cx),
+            Notice::LowStorage { device, free, total } => notify::for_low_storage(*device, *free, *total, &cx),
         };
         let Some((title, body)) = shown else { return };
         if !settings.throttle.lock().map(|mut t| t.allow(std::time::Instant::now())).unwrap_or(false) {
@@ -509,6 +532,8 @@ fn main() {
             palette_shortcut,
             scratchpad_shortcut,
             show_scratchpad,
+            watch_devices,
+            wake_device,
             notes::notes,
             notes::note_create,
             notes::note_open,
@@ -539,6 +564,9 @@ fn main() {
                     }
                     if let tether_ipc::Event::Received { from, held, .. } = &event {
                         notify_event(&events_to, Notice::Send { from: *from, held: *held });
+                    }
+                    if let tether_ipc::Event::LowStorage { device, free, total } = &event {
+                        notify_event(&events_to, Notice::LowStorage { device: *device, free: *free, total: *total });
                     }
                     if let tether_ipc::Event::Clipboard(item) = &event {
                         notify_event(&events_to, Notice::Copy(item.clone()));
