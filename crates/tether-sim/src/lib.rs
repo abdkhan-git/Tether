@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tether_core::delta::{transform, Delta};
 use tether_core::live::LiveNote;
 use tether_core::notes::{Doc, Edit, Run, Side};
+use tether_core::shelf::{text_root, ShelfKind, ShelfRef, DEFAULT_TTL_MS};
 use tether_core::{DeviceId, DeviceKey, ItemId, NoteRef, Op, OpKind, OpLog, Timestamp};
 
 /// SplitMix64: tiny, fast, and fully reproducible across platforms.
@@ -76,6 +77,10 @@ pub struct Report {
     pub note_edits: usize,
     /// Of those, typed in an editor that had not seen the latest text.
     pub stale_edits: usize,
+    /// Shelf items added, removed and pinned or unpinned.
+    pub shelf_adds: usize,
+    pub shelf_removes: usize,
+    pub shelf_pins: usize,
     /// Changes to a note's title, notebook, pin or trash.
     pub note_metas: usize,
     /// Device renames.
@@ -218,6 +223,40 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
                 devices[d].created += 1;
                 report.sends += 1;
             }
+        } else if (52..56).contains(&roll) {
+            // The shelf: add an item (some expire within the run), take one
+            // off, or pin or unpin one this device can see.
+            let d = rng.below(n as u64) as usize;
+            let t = physical(now, devices[d].skew_ms);
+            let shelf = devices[d].log.shelf(t);
+            let kind = match (rng.below(3), shelf.is_empty()) {
+                (0, _) | (_, true) => {
+                    let ttl_ms = [0, 2_000, 6_000, DEFAULT_TTL_MS][rng.below(4) as usize];
+                    let (kind, text, size, root) = if rng.chance(0.5) {
+                        let text = format!("d{d}-step{step}");
+                        (ShelfKind::Text, Some(text.clone()), text.len() as u64, text_root(&text))
+                    } else {
+                        let mut root = [0u8; 32];
+                        root[..8].copy_from_slice(&rng.next_u64().to_le_bytes());
+                        (ShelfKind::File, None, rng.below(1 << 30), root)
+                    };
+                    report.shelf_adds += 1;
+                    OpKind::ShelfAdd { kind, name: format!("d{d}-{step}.bin"), size, root, text, ttl_ms }
+                }
+                (1, false) => {
+                    report.shelf_removes += 1;
+                    OpKind::ShelfRemove { item: shelf[rng.below(shelf.len() as u64) as usize].item }
+                }
+                (_, false) => {
+                    report.shelf_pins += 1;
+                    OpKind::ShelfPin {
+                        item: shelf[rng.below(shelf.len() as u64) as usize].item,
+                        pinned: rng.chance(0.6),
+                    }
+                }
+            };
+            marks.push(devices[d].log.append_local(kind, t).expect("within limits"));
+            devices[d].created += 1;
         } else if roll < 52 {
             // Notes: create one now and then, change one's title or notebook,
             // pin it or throw it away; otherwise type in one.
@@ -298,7 +337,8 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
     report.failure = check_local_invariants(&devices)
         .or_else(|| check_convergence(&devices))
         .or_else(|| check_marks(&devices, &marks))
-        .or_else(|| check_notes(&devices, &marks));
+        .or_else(|| check_notes(&devices, &marks))
+        .or_else(|| check_shelf(&devices, &marks, now));
     report
 }
 
@@ -478,7 +518,15 @@ fn attack(devices: &mut [Device], attacker: &DeviceKey, now: u64, rng: &mut Rng)
     let author_id = devices[author].log.me();
     let next = devices[victim].log.ops_from(author_id).len() as u64 + 1;
     let ts = devices[victim].log.clock();
-    let forged = match rng.below(7) {
+    let forged = match rng.below(8) {
+        // Takes a real item off the shelf, signed by the attacker, claiming
+        // to be a member. If it stuck, `check_shelf` would find it missing.
+        7 => {
+            let Some(target) = devices[victim].log.shelf(now).first().map(|i| i.item) else { return };
+            let mut op = Op::sign(attacker, next, ts, OpKind::ShelfRemove { item: target });
+            op.device = author_id;
+            op
+        }
         // Types into the scratchpad, signed by the attacker, claiming to be a member.
         6 => {
             let first = tether_core::notes::first_counter(next).expect("small");
@@ -541,7 +589,13 @@ fn holds_forgery(log: &OpLog) -> bool {
         OpKind::NoteCreate { title } => title == FORGED,
         OpKind::NoteEdit { edit, .. } => edit.inserts.iter().any(|r| r.text == FORGED),
         OpKind::NoteMeta { title, notebook, .. } => [title, notebook].iter().any(|f| f.as_deref() == Some(FORGED)),
-        OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } | OpKind::Send { .. } => false,
+        OpKind::ShelfAdd { name, .. } => name == FORGED,
+        OpKind::DeviceRevoked { .. }
+        | OpKind::Pin { .. }
+        | OpKind::Delete { .. }
+        | OpKind::Send { .. }
+        | OpKind::ShelfRemove { .. }
+        | OpKind::ShelfPin { .. } => false,
     })
 }
 
@@ -654,6 +708,61 @@ fn check_notes(devices: &[Device], marks: &[Op]) -> Option<String> {
                 visible.len(),
                 expected.len(),
                 doc.waiting()
+            ));
+        }
+    }
+    None
+}
+
+/// The shelf at the end of the run, against an oracle built from what the
+/// devices did: an item is there exactly when an effective add made it, no
+/// effective removal names it (with its root), and it is pinned by its latest
+/// effective pin or has not reached its time to live. Every honest device must
+/// show exactly that, at the same moment.
+fn check_shelf(devices: &[Device], marks: &[Op], now: u64) -> Option<String> {
+    let cutoffs: BTreeMap<DeviceId, u64> =
+        devices.iter().filter_map(|d| Some((d.log.me(), d.revoked_after?))).collect();
+    let effective = |op: &Op| cutoffs.get(&op.device).map_or(true, |c| op.seq <= *c);
+    let mut removed = BTreeSet::new();
+    let mut pins: BTreeMap<ShelfRef, (MarkKey, bool)> = BTreeMap::new();
+    for op in marks.iter().filter(|op| effective(op)) {
+        match &op.kind {
+            OpKind::ShelfRemove { item } => {
+                removed.insert(*item);
+            }
+            OpKind::ShelfPin { item, pinned } => {
+                let key = (op.ts, op.device, op.seq);
+                if pins.get(item).map_or(true, |(held, _)| *held < key) {
+                    pins.insert(*item, (key, *pinned));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut expected: Vec<(ShelfRef, bool)> = marks
+        .iter()
+        .filter(|op| effective(op))
+        .filter_map(|op| {
+            let OpKind::ShelfAdd { root, ttl_ms, .. } = &op.kind else { return None };
+            let item = ShelfRef { device: op.device, seq: op.seq, root: *root };
+            let pinned = pins.get(&item).is_some_and(|(_, p)| *p);
+            let alive = pinned || *ttl_ms == 0 || op.ts.wall_ms + ttl_ms > now;
+            (!removed.contains(&item) && alive).then_some((item, pinned))
+        })
+        .collect();
+    expected.sort();
+    for d in devices.iter().filter(|d| d.revoked_after.is_none()) {
+        let mut got: Vec<(ShelfRef, bool)> = d.log.shelf(now).iter().map(|i| (i.item, i.pinned)).collect();
+        got.sort();
+        if got != expected {
+            let pinned = |v: &[(ShelfRef, bool)]| v.iter().filter(|(_, p)| *p).count();
+            return Some(format!(
+                "{} shows {} shelf items ({} pinned), expected {} ({} pinned)",
+                d.log.me(),
+                got.len(),
+                pinned(&got),
+                expected.len(),
+                pinned(&expected)
             ));
         }
     }
@@ -839,6 +948,7 @@ mod tests {
         let cfg = Config::default();
         let (mut attacks, mut revocations, mut deletes, mut marks, mut renames) = (0, 0, 0, 0, 0);
         let (mut edits, mut stale, mut metas) = (0, 0, 0);
+        let (mut adds, mut removes, mut pins) = (0, 0, 0);
         for seed in 0..300 {
             let report = run(seed, &cfg);
             assert!(report.failure.is_none(), "seed {seed} failed: {:?}", report.failure);
@@ -850,7 +960,11 @@ mod tests {
             edits += report.note_edits;
             stale += report.stale_edits;
             metas += report.note_metas;
+            adds += report.shelf_adds;
+            removes += report.shelf_removes;
+            pins += report.shelf_pins;
         }
+        assert!(adds > 1_000 && removes > 300 && pins > 300, "the shelf must be exercised: {adds} {removes} {pins}");
         assert!(attacks > 300 && revocations > 80, "the adversary must actually be exercised");
         assert!(deletes > 1_000 && marks > 3 * deletes / 2, "pins and deletes must actually be exercised");
         assert!(renames > 1_000, "renames must actually be exercised");

@@ -2,6 +2,7 @@
 //! against these before any of it is used (SECURITY.md, rule 6).
 
 use crate::notes::{MAX_NOTEBOOK_BYTES, MAX_TITLE_BYTES};
+use crate::shelf::{safe_name, text_root, ShelfKind, MAX_INLINE_BYTES, MAX_ITEM_BYTES, MAX_TTL_MS};
 use crate::{Op, OpKind};
 
 /// Largest clipboard text that syncs. Bigger content belongs to file transfer.
@@ -36,7 +37,22 @@ pub fn op_size(op: &Op) -> usize {
             OpKind::NoteMeta { title, notebook, .. } => {
                 title.as_ref().map_or(0, String::len) + notebook.as_ref().map_or(0, String::len)
             }
+            OpKind::ShelfAdd { name, text, .. } => name.len() + text.as_ref().map_or(0, String::len),
+            OpKind::ShelfRemove { .. } | OpKind::ShelfPin { .. } => 0,
         }
+}
+
+/// A shelf item's description is consistent and within limits: a name that is
+/// already safe, a size within bounds, and for text exactly the inline text
+/// with its root (files and folders carry no text).
+fn shelf_add_ok(kind: ShelfKind, name: &str, size: u64, root: &[u8; 32], text: &Option<String>, ttl_ms: u64) -> bool {
+    let inline = matches!(kind, ShelfKind::Text | ShelfKind::Link);
+    let text_ok = match (inline, text) {
+        (true, Some(t)) => t.len() <= MAX_INLINE_BYTES && size == t.len() as u64 && *root == text_root(t),
+        (false, None) => size <= MAX_ITEM_BYTES,
+        _ => false,
+    };
+    text_ok && name.len() <= crate::shelf::MAX_NAME_BYTES && safe_name(name) == name && ttl_ms <= MAX_TTL_MS
 }
 
 /// True when an operation's contents are within limits.
@@ -52,5 +68,9 @@ pub fn op_within_limits(op: &Op) -> bool {
                 title.as_ref().map_or(true, |t| t.len() <= MAX_TITLE_BYTES)
                     && notebook.as_ref().map_or(true, |n| n.len() <= MAX_NOTEBOOK_BYTES)
             }
+            OpKind::ShelfAdd { kind, name, size, root, text, ttl_ms } => {
+                shelf_add_ok(*kind, name, *size, root, text, *ttl_ms)
+            }
+            OpKind::ShelfRemove { .. } | OpKind::ShelfPin { .. } => true,
         }
 }

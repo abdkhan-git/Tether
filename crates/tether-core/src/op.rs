@@ -45,6 +45,23 @@ pub enum OpKind {
     /// Typing in a note: a batch of inserted runs and deleted characters
     /// (docs/notes-design.md). Character ids belong to this operation's seq.
     NoteEdit { note: NoteRef, edit: crate::notes::Edit },
+    /// Put something on the shared shelf. The item is this operation's
+    /// `(device, seq)`; its bytes are chunks described by the manifest whose
+    /// hash is `root` (for text and links, `text` holds it and `root` is
+    /// [`crate::shelf::text_root`]). Gone `ttl_ms` after it was added unless
+    /// pinned; 0 means it stays.
+    ShelfAdd {
+        kind: crate::shelf::ShelfKind,
+        name: String,
+        size: u64,
+        root: [u8; 32],
+        text: Option<String>,
+        ttl_ms: u64,
+    },
+    /// Take an item off the shelf on every device. Final, like a clipboard delete.
+    ShelfRemove { item: crate::shelf::ShelfRef },
+    /// Pin or unpin a shelf item: a pinned item does not expire. Latest wins.
+    ShelfPin { item: crate::shelf::ShelfRef, pinned: bool },
     /// Change a note's title or notebook, pin or trash it. Each field: the
     /// latest wins. An empty notebook means none.
     NoteMeta {

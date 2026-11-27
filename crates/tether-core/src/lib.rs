@@ -21,6 +21,7 @@ pub mod notes;
 pub mod op;
 pub mod pairing;
 pub mod pulse;
+pub mod shelf;
 pub mod wire;
 
 pub use clock::{Clock, SystemClock};
@@ -29,7 +30,7 @@ pub use hlc::{Hlc, Timestamp};
 pub use identity::{DeviceId, DeviceKey, Signature};
 pub use log::{
     derive_trust, ApplyResult, BatchOutcome, ItemId, LocalError, Marks, NoteInfo, NoteRevision, OpLog, Rejection,
-    Trust, VersionVector,
+    ShelfItem, Trust, VersionVector,
 };
 pub use op::{item_hash, send_is_fresh, ItemRef, NoteRef, Op, OpKind};
 pub use wire::{DecodeError, Message};

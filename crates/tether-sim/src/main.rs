@@ -59,7 +59,7 @@ fn main() {
     }
     let sum = |f: fn(&Report) -> usize| reports.iter().map(f).sum::<usize>();
     println!(
-        "{seeds} seeds, {} devices, {} steps each, {threads} threads: {failed} failed, {} ops, {} pins/unpins/deletes ({} deletes), {} renames, {} sends, {} note edits ({} from a stale editor), {} note changes, {} network faults, {} attacks, {} revocations, {:.2?}",
+        "{seeds} seeds, {} devices, {} steps each, {threads} threads: {failed} failed, {} ops, {} pins/unpins/deletes ({} deletes), {} renames, {} sends, {} note edits ({} from a stale editor), {} note changes, {} shelf adds ({} removes, {} pins), {} network faults, {} attacks, {} revocations, {:.2?}",
         cfg.devices,
         cfg.steps,
         sum(|r| r.ops),
@@ -70,6 +70,9 @@ fn main() {
         sum(|r| r.note_edits),
         sum(|r| r.stale_edits),
         sum(|r| r.note_metas),
+        sum(|r| r.shelf_adds),
+        sum(|r| r.shelf_removes),
+        sum(|r| r.shelf_pins),
         sum(|r| r.faults),
         sum(|r| r.attacks),
         sum(|r| r.revoked as usize),

@@ -68,6 +68,21 @@ pub struct NoteRevision {
     pub deleted: u32,
 }
 
+/// An item on the shared shelf, as every device holding the same operations
+/// sees it (see [`OpLog::shelf`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShelfItem {
+    pub item: crate::shelf::ShelfRef,
+    pub kind: crate::shelf::ShelfKind,
+    pub name: String,
+    pub size: u64,
+    pub text: Option<String>,
+    pub added: Timestamp,
+    pub pinned: bool,
+    /// When it leaves the shelf (wall-clock ms); `None` while pinned or if it stays.
+    pub expires_ms: Option<u64>,
+}
+
 /// A pause longer than this starts a new revision.
 const REVISION_GAP_MS: u64 = 120_000;
 /// Most revisions listed (the newest).
@@ -729,6 +744,61 @@ impl OpLog {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The shared shelf at wall-clock time `now_ms`, newest first: every
+    /// effective `ShelfAdd` not removed (removal wins, and must name the item
+    /// by its root) and not expired (unpinned and older than its time to
+    /// live). Pins are latest-wins by (HLC time, device, seq). A function of
+    /// the operations held and `now_ms`, so devices that hold the same
+    /// operations agree, apart from clock skew at the moment of expiry.
+    pub fn shelf(&self, now_ms: u64) -> Vec<ShelfItem> {
+        use crate::shelf::ShelfRef;
+        let mut removed: BTreeSet<ShelfRef> = BTreeSet::new();
+        let mut pins: BTreeMap<ShelfRef, ((Timestamp, DeviceId, u64), bool)> = BTreeMap::new();
+        for op in self.all_ops().filter(|op| self.is_effective(op)) {
+            match &op.kind {
+                OpKind::ShelfRemove { item } => {
+                    removed.insert(*item);
+                }
+                OpKind::ShelfPin { item, pinned } => {
+                    let key = (op.ts, op.device, op.seq);
+                    let slot = pins.entry(*item).or_insert((key, *pinned));
+                    if key > slot.0 {
+                        *slot = (key, *pinned);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut items: Vec<ShelfItem> = self
+            .all_ops()
+            .filter(|op| self.is_effective(op))
+            .filter_map(|op| {
+                let OpKind::ShelfAdd { kind, name, size, root, text, ttl_ms } = &op.kind else { return None };
+                let item = ShelfRef { device: op.device, seq: op.seq, root: *root };
+                if removed.contains(&item) {
+                    return None;
+                }
+                let pinned = pins.get(&item).is_some_and(|(_, p)| *p);
+                let expires_ms = (!pinned && *ttl_ms > 0).then(|| op.ts.wall_ms.saturating_add(*ttl_ms));
+                if expires_ms.is_some_and(|at| at <= now_ms) {
+                    return None;
+                }
+                Some(ShelfItem {
+                    item,
+                    kind: *kind,
+                    name: name.clone(),
+                    size: *size,
+                    text: text.clone(),
+                    added: op.ts,
+                    pinned,
+                    expires_ms,
+                })
+            })
+            .collect();
+        items.sort_by_key(|i| std::cmp::Reverse((i.added, i.item.device)));
+        items
     }
 
     /// Names given to members by `Rename` operations: for each member, the
