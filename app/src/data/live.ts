@@ -6,6 +6,7 @@ import { os } from "@/lib/platform";
 import { daemon, errorText, type DaemonEvent } from "./daemon";
 import { applyItemChange, clipOf, devicesOf, heldBecause, itemOf, mergeClips, nearbyOf, shortId, withArticle } from "./map";
 import { useTether, type Backend } from "./store";
+import { noteEvents, useNotes } from "./notes";
 
 /** Items fetched per history page (the daemon's maximum). */
 const PAGE = 100;
@@ -81,8 +82,20 @@ function onEvent(e: DaemonEvent) {
         e.held ? "It looks like a command, so it is held in history and not on your clipboard." : "It is on your clipboard, ready to paste.",
       );
       break;
+    case "notesChanged":
+      useNotes.getState().changed();
+      break;
+    case "notePatch":
+      noteEvents.patch(e.note, e);
+      useNotes.getState().changed();
+      break;
+    case "noteNoop":
+      noteEvents.noop(e.note, e.editor, e.n);
+      break;
     case "lagged":
       void refreshAll();
+      noteEvents.reopenAll();
+      useNotes.getState().changed();
       break;
   }
 }
@@ -167,10 +180,18 @@ export async function connectDaemon(): Promise<void> {
     (shortcut) => set({ paletteShortcut: shortcut ?? "" }),
     () => set({ paletteShortcut: null }),
   );
+  daemon.scratchpadShortcut().then(
+    (shortcut) => set({ scratchpadShortcut: shortcut ?? "" }),
+    () => set({ scratchpadShortcut: null }),
+  );
   await daemon.onEvent(onEvent);
   await daemon.onLink((link) => {
-    if (link.state === "connected") void refreshAll();
-    else set({ link });
+    if (link.state === "connected") {
+      void refreshAll();
+      // The daemon may have restarted, or events were missed while away.
+      noteEvents.reopenAll();
+      useNotes.getState().changed();
+    } else set({ link });
   });
   // The first `status` call also starts the daemon if none is running.
   await refreshAll();

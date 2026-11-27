@@ -22,6 +22,8 @@ use tracing::{debug, warn};
 
 use crate::api;
 use crate::ctx::Ctx;
+use crate::net;
+use crate::notes::Edited;
 
 /// Most control clients connected at once; more are closed on arrival.
 pub const MAX_CLIENTS: usize = 8;
@@ -122,6 +124,35 @@ async fn handle(ctx: &Ctx, quic: &quinn::Endpoint, request: Request) -> Result<R
         Request::Delete { author, seq } => {
             api::delete(ctx, (author, seq))?;
             Reply::Marked
+        }
+        Request::Notes => Reply::Notes(ctx.notes()),
+        Request::NoteCreate { title, notebook } => {
+            let (note, ops) = ctx.note_create(&title, &notebook)?;
+            net::broadcast_all(ctx, ops);
+            Reply::NoteCreated { note }
+        }
+        Request::NoteOpen { note, editor } => Reply::NoteText(ctx.note_open(note, editor)?),
+        Request::NoteEdit(edit) => {
+            ctx.note_turn().await;
+            match ctx.note_edit(edit) {
+                Ok(Edited::Done(ops)) => {
+                    net::broadcast_all(ctx, ops);
+                    Reply::NoteEdited
+                }
+                Ok(Edited::Stale) => Reply::NoteStale,
+                Ok(Edited::Secret(kind)) => Reply::NoteSecret { kind: kind.to_string() },
+                Err(e) => Reply::NoteRefused { reason: format!("{e:#}") },
+            }
+        }
+        Request::NoteMeta { note, title, notebook, pinned, trashed } => {
+            net::broadcast_all(ctx, ctx.note_meta(note, title, notebook, pinned, trashed)?);
+            Reply::NoteChanged
+        }
+        Request::NoteHistory { note } => Reply::NoteHistory(ctx.note_history(note)?),
+        Request::NoteAt { note, at, author } => Reply::NoteText(ctx.note_at(note, at, author)?),
+        Request::NoteRestore { note, at, author } => {
+            net::broadcast_all(ctx, ctx.note_restore(note, at, author)?);
+            Reply::NoteChanged
         }
         Request::Subscribe => bail!("Subscribe is handled before this point"),
     })

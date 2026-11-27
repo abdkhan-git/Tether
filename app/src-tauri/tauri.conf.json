@@ -42,7 +42,7 @@
         "worker-src": "'none'"
       },
       "freezePrototype": true,
-      "capabilities": ["main", "palette"]
+      "capabilities": ["main", "palette", "scratchpad"]
     }
   },
   "bundle": {

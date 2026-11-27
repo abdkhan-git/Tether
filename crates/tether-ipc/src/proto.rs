@@ -7,12 +7,13 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 use tether_core::content::HoldReason;
-use tether_core::{DeviceId, Timestamp};
+use tether_core::notes::{Span, TextChange};
+use tether_core::{Delta, DeviceId, NoteRef, NoteRevision, Timestamp};
 
 /// Bumped on any change to the messages below; both ends must match.
-pub const PROTOCOL_VERSION: u16 = 6;
-/// Largest request a client may send.
-pub const MAX_REQUEST_BYTES: usize = 16 << 10;
+pub const PROTOCOL_VERSION: u16 = 7;
+/// Largest request a client may send (a paste that fills a note: 256 KiB of text).
+pub const MAX_REQUEST_BYTES: usize = 320 << 10;
 /// Largest reply or event the daemon sends (one clipboard item can be 1 MiB).
 pub const MAX_REPLY_BYTES: usize = 4 << 20;
 /// Most items in one history page.
@@ -74,8 +75,92 @@ pub enum Request {
         device: DeviceId,
         name: String,
     },
+    /// Every note, newest change first, with a preview of each.
+    Notes,
+    NoteCreate {
+        title: String,
+        notebook: String,
+    },
+    /// A note's text, its version, and who wrote what. The note stays open in
+    /// the daemon: changes follow as [`Event::NotePatch`].
+    /// `editor`, if given, learns which of its edits the text includes.
+    NoteOpen {
+        note: NoteRef,
+        editor: Option<EditorId>,
+    },
+    NoteEdit(NoteEdit),
+    /// Change a note's title or notebook, pin or trash it, on every device.
+    /// The latest change to each wins.
+    NoteMeta {
+        note: NoteRef,
+        title: Option<String>,
+        notebook: Option<String>,
+        pinned: Option<bool>,
+        trashed: Option<bool>,
+    },
+    /// The note's revisions, newest first.
+    NoteHistory {
+        note: NoteRef,
+    },
+    /// The note as it was at a revision (named by its `at` and author).
+    NoteAt {
+        note: NoteRef,
+        at: Timestamp,
+        author: DeviceId,
+    },
+    /// Make the note's text what it was at a revision, as a new edit.
+    NoteRestore {
+        note: NoteRef,
+        at: Timestamp,
+        author: DeviceId,
+    },
     /// Turn this connection into a stream of [`Event`]s.
     Subscribe,
+}
+
+/// An editor window, for as long as it has a note open: random, so that the
+/// daemon can tell its edits from another window's, and a repeat of one it
+/// has already made (the reply was lost) from a new one.
+pub type EditorId = [u8; 16];
+
+/// Typing in a note, made against the version of its text the editor has seen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteEdit {
+    pub note: NoteRef,
+    pub base: u64,
+    pub delta: Delta,
+    pub editor: EditorId,
+    /// Counts this editor's edits, from 1. Repeating the last one is harmless.
+    pub n: u64,
+    /// The user was told the text looks like a secret, and wants it in the note.
+    pub allow_secret: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteSummary {
+    pub note: NoteRef,
+    pub title: String,
+    pub notebook: String,
+    pub pinned: bool,
+    pub trashed: bool,
+    pub created: Timestamp,
+    pub updated: Timestamp,
+    pub updated_by: DeviceId,
+    /// The start of the text.
+    pub preview: String,
+    /// Size of the text.
+    pub chars: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteText {
+    pub version: u64,
+    pub text: String,
+    /// Who wrote it, in order.
+    pub authors: Vec<Span>,
+    /// The last of the asking editor's edits that the daemon has made (0 if it
+    /// remembers none).
+    pub answered: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +185,28 @@ pub enum Reply {
     Renamed,
     Sent,
     Copied,
+    Notes(Vec<NoteSummary>),
+    NoteCreated {
+        note: NoteRef,
+    },
+    NoteText(NoteText),
+    /// The edit was recorded. The patch it became arrives as an event.
+    NoteEdited,
+    /// The edit's base is not a version the daemon remembers: open the note
+    /// again and carry the edit over.
+    NoteStale,
+    /// Nothing was recorded: the text looks like this kind of secret. Ask the
+    /// user, and send it again with `allow_secret` if they want it.
+    NoteSecret {
+        kind: String,
+    },
+    /// Nothing was recorded, and sending it again would not help (the note is
+    /// full, or gone).
+    NoteRefused {
+        reason: String,
+    },
+    NoteHistory(Vec<NoteRevision>),
+    NoteChanged,
     Subscribed,
 }
 
@@ -199,6 +306,22 @@ pub enum Event {
     /// An item was pinned, unpinned or deleted, here or on another device.
     /// A deleted item is gone from history: drop it.
     ItemChanged { author: DeviceId, seq: u64, pinned: bool, deleted: bool },
+    /// A note was created, or its details changed, or the text of one nobody
+    /// has open here changed: fetch the list again.
+    NotesChanged,
+    /// The text of an open note changed. Patches to one note arrive in order,
+    /// each starting at the version the one before ended at.
+    NotePatch {
+        note: NoteRef,
+        from: u64,
+        to: u64,
+        change: TextChange,
+        /// The editor edit that made it, if one on this device did: its answer.
+        by: Option<(EditorId, u64)>,
+    },
+    /// An editor's edit was recorded but changed nothing (another device had
+    /// already deleted what it deletes).
+    NoteNoop { note: NoteRef, by: (EditorId, u64) },
     /// This subscriber fell behind and missed events; refresh everything.
     Lagged { missed: u64 },
 }

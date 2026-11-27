@@ -6,6 +6,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { HoldReason, LinkState, PairCode } from "./types";
+import type { Delta } from "@/lib/notes/delta";
+import type { EditRequest, EditResult, OpenedNote, Span } from "@/lib/notes/session";
 
 /** True inside the Tauri window; false in the browser preview (`npm run dev`). */
 export const inDesktopApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -54,6 +56,37 @@ export interface HistoryPage {
   next: Cursor | null;
 }
 
+export interface NoteSummary {
+  /** "author:seq", or "scratchpad". */
+  id: string;
+  title: string;
+  notebook: string;
+  pinned: boolean;
+  trashed: boolean;
+  created: number;
+  updated: number;
+  updatedBy: string;
+  preview: string;
+  chars: number;
+}
+
+export interface Revision {
+  author: string;
+  first: number;
+  at: number;
+  counter: number;
+  edits: number;
+  inserted: number;
+  deleted: number;
+}
+
+export interface NoteMetaChange {
+  title?: string;
+  notebook?: string;
+  pinned?: boolean;
+  trashed?: boolean;
+}
+
 export type DaemonEvent =
   | { type: "clipboard"; item: DaemonClip }
   | { type: "historyChanged" }
@@ -62,6 +95,9 @@ export type DaemonEvent =
   | { type: "paused"; paused: boolean }
   | { type: "itemChanged"; author: string; seq: number; pinned: boolean; deleted: boolean }
   | { type: "received"; from: string; author: string; seq: number; held: boolean }
+  | { type: "notesChanged" }
+  | { type: "notePatch"; note: string; from: number; to: number; delta: Delta; authors: Span[]; editor: string | null; n: number }
+  | { type: "noteNoop"; note: string; editor: string; n: number }
   | { type: "lagged" };
 
 export const daemon = {
@@ -80,6 +116,19 @@ export const daemon = {
   paletteShortcut: () => invoke<string | null>("palette_shortcut"),
   onPaletteOpen: (f: () => void): Promise<UnlistenFn> => listen("palette://open", () => f()),
   openLink: (url: string) => invoke<void>("open_link", { url }),
+  notes: () => invoke<NoteSummary[]>("notes"),
+  noteCreate: (title: string, notebook: string) => invoke<string>("note_create", { title, notebook }),
+  noteOpen: (note: string, editor: string) => invoke<OpenedNote>("note_open", { note, editor }),
+  noteEdit: (note: string, edit: EditRequest) => invoke<EditResult>("note_edit", { note, edit }),
+  noteMeta: (note: string, change: NoteMetaChange) => invoke<void>("note_meta", { note, ...change }),
+  noteHistory: (note: string) => invoke<Revision[]>("note_history", { note }),
+  noteAt: (note: string, r: Revision) => invoke<OpenedNote>("note_at", { note, at: r.at, counter: r.counter, author: r.author }),
+  noteRestore: (note: string, r: Revision) => invoke<void>("note_restore", { note, at: r.at, counter: r.counter, author: r.author }),
+  scratchOpen: (editor: string) => invoke<OpenedNote>("scratch_open", { editor }),
+  scratchEdit: (edit: EditRequest) => invoke<EditResult>("scratch_edit", { edit }),
+  scratchpadShortcut: () => invoke<string | null>("scratchpad_shortcut"),
+  showScratchpad: () => invoke<void>("show_scratchpad"),
+  onScratchpadOpen: (f: () => void): Promise<UnlistenFn> => listen("scratchpad://open", () => f()),
   autostart: () => invoke<boolean>("autostart"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   notifications: () => invoke<boolean>("notifications"),

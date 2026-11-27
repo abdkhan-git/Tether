@@ -7,7 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tether_core::notes::Doc;
+use tether_core::delta::{transform, Delta};
+use tether_core::live::LiveNote;
+use tether_core::notes::{Doc, Edit, Run, Side};
 use tether_core::{DeviceId, DeviceKey, ItemId, NoteRef, Op, OpKind, OpLog, Timestamp};
 
 /// SplitMix64: tiny, fast, and fully reproducible across platforms.
@@ -72,6 +74,10 @@ pub struct Report {
     pub sends: usize,
     /// Edits typed into notes.
     pub note_edits: usize,
+    /// Of those, typed in an editor that had not seen the latest text.
+    pub stale_edits: usize,
+    /// Changes to a note's title, notebook, pin or trash.
+    pub note_metas: usize,
     /// Device renames.
     pub renames: usize,
     pub revoked: bool,
@@ -90,9 +96,22 @@ struct Device {
     created: u64,
     /// Set when the device is compromised and revoked: (cutoff seq).
     revoked_after: Option<u64>,
-    /// Notes kept in memory and updated edit by edit as they arrive, the way
-    /// the daemon does (rebuilt from the log when membership changes).
-    docs: BTreeMap<NoteRef, Doc>,
+    /// Notes kept in memory and updated edit by edit as they arrive, by the
+    /// same code the daemon runs (rebuilt from the log when membership changes).
+    notes: BTreeMap<NoteRef, LiveNote>,
+    /// Note versions given out so far.
+    version: u64,
+    /// An editor window per note, following the note's patches with a lag.
+    editors: BTreeMap<NoteRef, Editor>,
+}
+
+/// What an editor shows: the text at some version, and the patches it has
+/// been sent since but not shown yet.
+#[derive(Default)]
+struct Editor {
+    version: u64,
+    text: String,
+    unseen: Vec<(u64, Delta)>,
 }
 
 pub fn run(seed: u64, cfg: &Config) -> Report {
@@ -109,7 +128,9 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
             partitioned: false,
             created: 0,
             revoked_after: None,
-            docs: BTreeMap::new(),
+            notes: BTreeMap::new(),
+            version: 0,
+            editors: BTreeMap::new(),
         })
         .collect();
     let root = devices[0].log.me();
@@ -198,34 +219,42 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
                 report.sends += 1;
             }
         } else if roll < 52 {
-            // Notes: create one now and then; otherwise type, delete or
-            // replace at a random place in a note this device can see.
+            // Notes: create one now and then, change one's title or notebook,
+            // pin it or throw it away; otherwise type in one.
             let d = rng.below(n as u64) as usize;
             let t = physical(now, devices[d].skew_ms);
             let notes: Vec<NoteRef> = devices[d].log.notes().into_keys().collect();
-            if notes.is_empty() || (notes.len() < 3 && rng.chance(0.05)) {
+            let note = notes[rng.below(notes.len() as u64) as usize];
+            if notes.len() < 4 && rng.chance(0.05) {
                 let op = devices[d]
                     .log
                     .append_local(OpKind::NoteCreate { title: format!("d{d}-note") }, t)
                     .expect("within limits");
                 feed(&mut devices[d], &[op], false);
+            } else if rng.chance(0.15) {
+                let kind = OpKind::NoteMeta {
+                    note,
+                    title: rng.chance(0.5).then(|| format!("d{d}-step{step}")),
+                    notebook: rng.chance(0.5).then(|| format!("book{}", rng.below(3))),
+                    pinned: rng.chance(0.5).then(|| rng.chance(0.5)),
+                    trashed: rng.chance(0.5).then(|| rng.chance(0.5)),
+                };
+                marks.push(devices[d].log.append_local(kind, t).expect("within limits"));
+                report.note_metas += 1;
             } else {
-                let note = notes[rng.below(notes.len() as u64) as usize];
-                let doc = devices[d].log.note_doc(note).expect("listed notes exist");
-                let len = doc.chars().len();
-                let at = rng.below(len as u64 + 1) as usize;
-                let delete = (rng.below(4) as usize).min(len - at);
-                let text: String = (0..rng.below(7)).map(|_| char::from(b'a' + rng.below(26) as u8)).collect();
-                if delete == 0 && text.is_empty() {
-                    continue;
+                match type_in_editor(&mut devices[d], note, t, &mut rng) {
+                    Ok(None) => continue,
+                    Ok(Some(stale)) => {
+                        report.note_edits += 1;
+                        report.stale_edits += usize::from(stale);
+                    }
+                    Err(failure) => {
+                        report.failure = Some(format!("step {step}: {failure}"));
+                        return report;
+                    }
                 }
-                let edit =
-                    doc.local_edit(devices[d].log.next_note_counter(), at, delete, &text).expect("within limits");
-                let op = devices[d].log.append_local(OpKind::NoteEdit { note, edit }, t).expect("within limits");
-                feed(&mut devices[d], &[op], false);
-                report.note_edits += 1;
             }
-            devices[d].created += 1;
+            devices[d].created = devices[d].log.ops_from(devices[d].log.me()).len() as u64;
         } else {
             let from = rng.below(n as u64) as usize;
             let to = (from + 1 + rng.below(n as u64 - 1) as usize) % n;
@@ -269,7 +298,7 @@ pub fn run(seed: u64, cfg: &Config) -> Report {
     report.failure = check_local_invariants(&devices)
         .or_else(|| check_convergence(&devices))
         .or_else(|| check_marks(&devices, &marks))
-        .or_else(|| check_notes(&devices));
+        .or_else(|| check_notes(&devices, &marks));
     report
 }
 
@@ -331,22 +360,93 @@ fn apply_to(d: &mut Device, batch: Vec<Op>, t: u64) -> usize {
 
 /// Keep `d`'s in-memory notes current, as the daemon does: apply each new
 /// edit as it comes, or rebuild everything from the log after a membership
-/// change (which can prune operations).
+/// change (which can prune operations). Each change to a note's text goes to
+/// its editor, which has not shown it yet.
 fn feed(d: &mut Device, fresh: &[Op], rebuild: bool) {
     if rebuild {
-        let notes = d.log.note_refs();
-        d.docs = notes.into_iter().map(|n| (n, d.log.build_note(n))).collect();
+        let held: BTreeSet<NoteRef> = d.notes.keys().copied().chain(d.log.note_refs()).collect();
+        for note in held {
+            let doc = d.log.build_note(note);
+            d.version += 1;
+            let live = d.notes.entry(note).or_insert_with(|| LiveNote::new(Doc::new(), 0));
+            if let Some(patch) = live.replace(doc, d.version) {
+                d.editors.entry(note).or_default().unseen.push((patch.to, patch.change.delta));
+            }
+        }
         return;
     }
+    let mut edits: BTreeMap<NoteRef, Vec<_>> = BTreeMap::new();
     for op in fresh {
-        match &op.kind {
-            OpKind::NoteCreate { .. } => {
-                d.docs.entry(NoteRef { device: op.device, seq: op.seq }).or_default();
-            }
-            OpKind::NoteEdit { note, edit } => d.docs.entry(*note).or_default().apply(op.device, edit),
-            _ => {}
+        if let OpKind::NoteEdit { note, edit } = &op.kind {
+            edits.entry(*note).or_default().push((op.device, edit));
         }
     }
+    for (note, edits) in edits {
+        d.version += 1;
+        let live = d.notes.entry(note).or_insert_with(|| LiveNote::new(Doc::new(), 0));
+        if let Some(patch) = live.apply(edits, d.version) {
+            d.editors.entry(note).or_default().unseen.push((patch.to, patch.change.delta));
+        }
+    }
+}
+
+/// Type, delete and replace at random places in `note`, in an editor that may
+/// not have shown the latest changes, exactly as the app and the daemon do
+/// between them. Returns whether the editor was behind, or `None` if there was
+/// nothing left to do. Fails if the editor ends up showing anything other than
+/// the note.
+fn type_in_editor(d: &mut Device, note: NoteRef, t: u64, rng: &mut Rng) -> Result<Option<bool>, String> {
+    let editor = d.editors.entry(note).or_default();
+    // It has shown some of what it was sent, perhaps all.
+    let shown = rng.below(editor.unseen.len() as u64 + 1) as usize;
+    for (to, delta) in editor.unseen.drain(..shown) {
+        editor.text = delta.apply(&editor.text).ok_or("a patch did not fit the editor's text")?;
+        editor.version = to;
+    }
+    let mut typed = Delta::new();
+    let mut left = editor.text.chars().count();
+    for _ in 0..=rng.below(2) {
+        let keep = rng.below(left as u64 + 1) as usize;
+        let delete = (rng.below(4) as usize).min(left - keep);
+        typed.keep(keep);
+        let text: String = (0..rng.below(7)).map(|_| char::from(b'a' + rng.below(26) as u8)).collect();
+        typed.insert(&text);
+        typed.delete(delete);
+        left -= keep + delete;
+    }
+    let typed = typed.finish();
+
+    // The daemon's side: carry the change over what the editor has not seen,
+    // and sign it as one or more operations.
+    let stale = !editor.unseen.is_empty();
+    let live = d.notes.entry(note).or_insert_with(|| LiveNote::new(Doc::new(), 0));
+    let delta = live.rebase(editor.version, &typed).ok_or("the note forgot a version its editor had just seen")?;
+    let mut text = typed.apply(&editor.text).ok_or("the typed change did not fit")?;
+    if delta.is_empty() {
+        return Ok(None);
+    }
+    d.version += 1;
+    let me = d.log.me();
+    let log = &mut d.log;
+    live.type_in(me, delta, d.version, |doc, delta| {
+        let (edit, rest) = doc.edit_for(log.next_note_counter(), delta).map_err(|e| format!("did not fit: {e:?}"))?;
+        let kind = OpKind::NoteEdit { note, edit: edit.clone() };
+        log.append_local(kind, t).map_err(|e| format!("{e:?}"))?;
+        Ok::<_, String>((edit, rest))
+    })?;
+
+    // The editor's side: what it had not seen, carried over what was typed.
+    let mut pending = typed;
+    for (_, delta) in editor.unseen.drain(..) {
+        let (pending2, delta2) = transform(&pending, &delta);
+        text = delta2.apply(&text).ok_or("a patch did not fit over what was typed")?;
+        pending = pending2;
+    }
+    if text != live.doc().text() {
+        return Err(format!("the editor shows {text:?}, the note is {:?}", live.doc().text()));
+    }
+    (editor.version, editor.text) = (live.version(), text);
+    Ok(Some(stale))
 }
 
 /// An honest device revokes another (not the root), which is then treated as
@@ -378,7 +478,16 @@ fn attack(devices: &mut [Device], attacker: &DeviceKey, now: u64, rng: &mut Rng)
     let author_id = devices[author].log.me();
     let next = devices[victim].log.ops_from(author_id).len() as u64 + 1;
     let ts = devices[victim].log.clock();
-    let forged = match rng.below(6) {
+    let forged = match rng.below(7) {
+        // Types into the scratchpad, signed by the attacker, claiming to be a member.
+        6 => {
+            let first = tether_core::notes::first_counter(next).expect("small");
+            let run = Run { first, parent: None, side: Side::Right, text: FORGED.into() };
+            let edit = Edit { inserts: vec![run], deletes: vec![] };
+            let mut op = Op::sign(attacker, next, ts, OpKind::NoteEdit { note: NoteRef::SCRATCHPAD, edit });
+            op.device = author_id;
+            op
+        }
         // Renames a member, signed by the attacker, claiming to be a member.
         5 => {
             let mut op = Op::sign(attacker, next, ts, OpKind::Rename { device: author_id, name: FORGED.into() });
@@ -431,7 +540,7 @@ fn holds_forgery(log: &OpLog) -> bool {
         OpKind::Rename { name, .. } => name == FORGED,
         OpKind::NoteCreate { title } => title == FORGED,
         OpKind::NoteEdit { edit, .. } => edit.inserts.iter().any(|r| r.text == FORGED),
-        OpKind::NoteMeta { title, .. } => title.as_deref() == Some(FORGED),
+        OpKind::NoteMeta { title, notebook, .. } => [title, notebook].iter().any(|f| f.as_deref() == Some(FORGED)),
         OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } | OpKind::Send { .. } => false,
     })
 }
@@ -446,14 +555,18 @@ fn holds_forgery(log: &OpLog) -> bool {
 /// "Effective" means the author was not revoked, or the operation is within
 /// its cutoff; and the item itself must be effective too.
 /// Notes, after the network heals:
-/// - every honest device holds the same notes, with the same text and the
-///   same authorship of every character;
+/// - every honest device holds the same notes, with the same titles, notebooks,
+///   pins and trash (which must also be what an oracle over the changes the
+///   devices made says), the same text and the same author of every character,
+///   and the same history, whose newest version is the text;
+/// - each device's in-memory copy, updated in whatever order edits arrived,
+///   equals the log, and so does the editor that followed its patches;
 /// - with no revocation in the run, nothing is lost: the visible characters
 ///   are exactly those inserted minus those deleted, and no edit is left
 ///   waiting for a missing character. (A revocation prunes the revoked
 ///   device's later characters, and edits anchored to them rightly wait, so
 ///   there only convergence is checked.)
-fn check_notes(devices: &[Device]) -> Option<String> {
+fn check_notes(devices: &[Device], marks: &[Op]) -> Option<String> {
     let honest: Vec<&Device> = devices.iter().filter(|d| d.revoked_after.is_none()).collect();
     let first = &honest[0].log;
     let notes = first.notes();
@@ -461,6 +574,9 @@ fn check_notes(devices: &[Device]) -> Option<String> {
         if d.log.notes() != notes {
             return Some(format!("{} and {} list different notes", d.log.me(), first.me()));
         }
+    }
+    if let Some(failure) = check_note_metas(devices, first, marks) {
+        return Some(failure);
     }
     let revoked = devices.iter().any(|d| d.revoked_after.is_some());
     for &note in notes.keys() {
@@ -470,18 +586,31 @@ fn check_notes(devices: &[Device]) -> Option<String> {
         // note as rebuilding it from the log.
         for d in &honest {
             let canonical = d.log.note_doc(note).expect("listed notes exist");
-            match d.docs.get(&note) {
-                Some(live) if live.text() == canonical.text() && live.spans() == canonical.spans() => {}
-                Some(live) => {
-                    return Some(format!(
-                        "{}'s live copy of note {note:?} differs from its log: {:?} vs {:?}",
-                        d.log.me(),
-                        live.text(),
-                        canonical.text()
-                    ))
-                }
-                None => return Some(format!("{} has no live copy of note {note:?}", d.log.me())),
+            let empty = LiveNote::new(Doc::new(), 0);
+            let live = d.notes.get(&note).unwrap_or(&empty).doc();
+            if live.text() != canonical.text() || live.authors() != canonical.authors() {
+                return Some(format!(
+                    "{}'s live copy of note {note:?} differs from its log: {:?} vs {:?}",
+                    d.log.me(),
+                    live.text(),
+                    canonical.text()
+                ));
             }
+            // An editor that shows everything it was sent shows the note.
+            let shown = d.editors.get(&note).map_or(Some(String::new()), |e| {
+                e.unseen.iter().try_fold(e.text.clone(), |text, (_, delta)| delta.apply(&text))
+            });
+            if shown.as_deref() != Some(&canonical.text()) {
+                return Some(format!("{}'s editor shows {shown:?}, not {:?}", d.log.me(), canonical.text()));
+            }
+        }
+        let history = first.note_history(note);
+        let newest = history.first().map(|r| first.note_at(note, r.at, r.author));
+        if newest.is_some_and(|doc_at| doc_at.map_or(true, |then| then.text() != doc.text())) {
+            return Some(format!("the newest version in the history of {note:?} is not its text"));
+        }
+        if let Some(d) = honest[1..].iter().find(|d| d.log.note_history(note) != history) {
+            return Some(format!("{} and {} disagree about the history of {note:?}", d.log.me(), first.me()));
         }
         for d in &honest[1..] {
             let other = d.log.note_doc(note).expect("listed notes exist");
@@ -491,6 +620,13 @@ fn check_notes(devices: &[Device]) -> Option<String> {
         }
         if revoked {
             continue;
+        }
+        // Every version in the history is complete: nothing in it hangs on an
+        // edit that sorts later.
+        for r in &history {
+            if first.note_at(note, r.at, r.author).map_or(true, |doc| doc.waiting() != 0) {
+                return Some(format!("a version in the history of {note:?} is incomplete"));
+            }
         }
         let (mut inserted, mut deleted) = (BTreeSet::new(), BTreeSet::new());
         for op in first.all_ops() {
@@ -519,6 +655,48 @@ fn check_notes(devices: &[Device]) -> Option<String> {
                 expected.len(),
                 doc.waiting()
             ));
+        }
+    }
+    None
+}
+
+/// What decides which of two changes to the same thing is the later one.
+type MarkKey = (Timestamp, DeviceId, u64);
+
+/// Each note's title, notebook, pin and trash, against an oracle: for each
+/// field, the latest effective change by (HLC time, device, seq). The
+/// scratchpad ignores all of them.
+fn check_note_metas(devices: &[Device], log: &OpLog, marks: &[Op]) -> Option<String> {
+    let cutoffs: BTreeMap<DeviceId, u64> =
+        devices.iter().filter_map(|d| Some((d.log.me(), d.revoked_after?))).collect();
+    for (note, info) in log.notes() {
+        let mut fields: [Option<(MarkKey, String)>; 4] = Default::default();
+        for op in marks.iter().filter(|op| cutoffs.get(&op.device).map_or(true, |c| op.seq <= *c)) {
+            let OpKind::NoteMeta { note: n, title, notebook, pinned, trashed } = &op.kind else { continue };
+            let key = (op.ts, op.device, op.seq);
+            let values =
+                [title.clone(), notebook.clone(), pinned.map(|p| p.to_string()), trashed.map(|t| t.to_string())];
+            for (field, value) in fields.iter_mut().zip(values) {
+                if let (true, Some(v)) = (*n == note, value) {
+                    if field.as_ref().map_or(true, |(held, _)| *held < key) {
+                        *field = Some((key, v));
+                    }
+                }
+            }
+        }
+        if note == NoteRef::SCRATCHPAD {
+            fields = Default::default();
+        }
+        let created = log.ops_from(note.device).get((note.seq as usize).wrapping_sub(1));
+        let title = match created.map(|op| &op.kind) {
+            Some(OpKind::NoteCreate { title }) => title.clone(),
+            _ => String::new(),
+        };
+        let got = [info.title, info.notebook, info.pinned.to_string(), info.trashed.to_string()];
+        let defaults = [title, String::new(), "false".into(), "false".into()];
+        let expected: Vec<String> = fields.into_iter().zip(defaults).map(|(f, d)| f.map_or(d, |(_, v)| v)).collect();
+        if got[..] != expected[..] {
+            return Some(format!("note {note:?} shows {got:?}, expected {expected:?}"));
         }
     }
     None
@@ -660,6 +838,7 @@ mod tests {
         // The 10,000-seed run is the CLI's job (in CI, in release mode).
         let cfg = Config::default();
         let (mut attacks, mut revocations, mut deletes, mut marks, mut renames) = (0, 0, 0, 0, 0);
+        let (mut edits, mut stale, mut metas) = (0, 0, 0);
         for seed in 0..300 {
             let report = run(seed, &cfg);
             assert!(report.failure.is_none(), "seed {seed} failed: {:?}", report.failure);
@@ -668,10 +847,14 @@ mod tests {
             deletes += report.deletes;
             marks += report.marks;
             renames += report.renames;
+            edits += report.note_edits;
+            stale += report.stale_edits;
+            metas += report.note_metas;
         }
         assert!(attacks > 300 && revocations > 80, "the adversary must actually be exercised");
         assert!(deletes > 1_000 && marks > 3 * deletes / 2, "pins and deletes must actually be exercised");
         assert!(renames > 1_000, "renames must actually be exercised");
+        assert!(edits > 5_000 && stale > edits / 10 && metas > 500, "notes must be exercised: {edits} {stale} {metas}");
     }
 
     #[test]

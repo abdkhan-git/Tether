@@ -272,7 +272,8 @@ async fn watch_cmd<W: Write>(target: &Target, out: &mut W, count: Option<u32>) -
             Event::ItemChanged { author, deleted: true, .. } => {
                 writeln!(out, "an item from {} was deleted", who(&names, &author))?
             }
-            Event::ItemChanged { .. } => {}
+            // Notes are the app's; a watcher of copies has no use for them.
+            Event::ItemChanged { .. } | Event::NotesChanged | Event::NotePatch { .. } | Event::NoteNoop { .. } => {}
             Event::Received { from, held, .. } => writeln!(
                 out,
                 "{} sent this device an item{}",

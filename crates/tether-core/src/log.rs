@@ -28,7 +28,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use serde::{Deserialize, Serialize};
+
 use crate::limits::{op_size, op_within_limits, MAX_OPS_PER_MESSAGE, MAX_PAGE_BYTES, MAX_TEXT_BYTES};
+use crate::notes::{Doc, Edit, MAX_NOTEBOOK_BYTES, MAX_TITLE_BYTES};
 use crate::op::{item_hash, ItemRef, NoteRef};
 use crate::{DeviceId, DeviceKey, Hlc, Op, OpKind, Timestamp};
 
@@ -37,6 +40,38 @@ pub type VersionVector = BTreeMap<DeviceId, u64>;
 
 /// A clipboard item's name: the `(device, seq)` of the operation that copied it.
 pub type ItemId = (DeviceId, u64);
+
+/// A note's resolved metadata (see [`OpLog::notes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteInfo {
+    pub title: String,
+    /// Empty when the note is in no notebook.
+    pub notebook: String,
+    pub pinned: bool,
+    pub trashed: bool,
+    pub created: Timestamp,
+    /// The latest edit or metadata change, and who made it.
+    pub updated: Timestamp,
+    pub updated_by: DeviceId,
+}
+
+/// Typing by one device without a long break: one line of a note's history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteRevision {
+    pub author: DeviceId,
+    /// Its first and last edit. `at` with `author` names the revision
+    /// ([`OpLog::note_at`]).
+    pub first: Timestamp,
+    pub at: Timestamp,
+    pub edits: u32,
+    pub inserted: u32,
+    pub deleted: u32,
+}
+
+/// A pause longer than this starts a new revision.
+const REVISION_GAP_MS: u64 = 120_000;
+/// Most revisions listed (the newest).
+pub const MAX_REVISIONS: usize = 500;
 
 /// Pins and deletes, resolved from every effective operation held.
 ///
@@ -49,17 +84,6 @@ pub type ItemId = (DeviceId, u64);
 ///
 /// Like membership, this is a function of the set of operations held, so
 /// every device that holds the same operations reaches the same marks.
-/// A note's resolved metadata (see [`OpLog::notes`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NoteInfo {
-    pub title: String,
-    pub pinned: bool,
-    pub trashed: bool,
-    pub created: Timestamp,
-    /// The latest edit or metadata change.
-    pub updated: Timestamp,
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Marks {
     pub deleted: BTreeSet<ItemId>,
@@ -259,8 +283,10 @@ impl OpLog {
             {
                 return Err(LocalError::NameTooLong)
             }
-            OpKind::NoteCreate { title } | OpKind::NoteMeta { title: Some(title), .. }
-                if title.len() > crate::notes::MAX_TITLE_BYTES =>
+            OpKind::NoteCreate { title } if title.len() > MAX_TITLE_BYTES => return Err(LocalError::NameTooLong),
+            OpKind::NoteMeta { title, notebook, .. }
+                if title.as_ref().is_some_and(|t| t.len() > MAX_TITLE_BYTES)
+                    || notebook.as_ref().is_some_and(|n| n.len() > MAX_NOTEBOOK_BYTES) =>
             {
                 return Err(LocalError::NameTooLong)
             }
@@ -517,69 +543,105 @@ impl OpLog {
         crate::notes::first_counter(self.ops_from(self.me()).len() as u64 + 1).unwrap_or(u64::MAX)
     }
 
-    /// Every note that exists (its `NoteCreate` is effective), with its
-    /// title, pin and trash state resolved latest-wins per field, and when it
-    /// was created and last changed. A function of the operations held.
+    /// Every note that exists (its `NoteCreate` is effective, or it is the
+    /// scratchpad), with its title, notebook, pin and trash state resolved
+    /// latest-wins per field, and when it was created and last changed. A
+    /// function of the operations held.
     pub fn notes(&self) -> BTreeMap<NoteRef, NoteInfo> {
-        type Field<T> = Option<((Timestamp, DeviceId, u64), T)>;
-        fn latest<T: Clone>(slot: &mut Field<T>, key: (Timestamp, DeviceId, u64), value: &Option<T>) {
-            match (value, slot.as_ref()) {
-                (None, _) => {}
-                (Some(_), Some((held, _))) if *held >= key => {}
-                (Some(v), _) => *slot = Some((key, v.clone())),
+        type Key = (Timestamp, DeviceId, u64);
+        /// The latest value of each field, with when and by whom it was set.
+        #[derive(Default)]
+        struct Fields<'a> {
+            title: Option<(Key, &'a str)>,
+            notebook: Option<(Key, &'a str)>,
+            pinned: Option<(Key, bool)>,
+            trashed: Option<(Key, bool)>,
+            updated: Option<(Timestamp, DeviceId)>,
+        }
+        fn latest<T>(slot: &mut Option<(Key, T)>, key: Key, value: Option<T>) {
+            if let Some(v) = value {
+                if slot.as_ref().map_or(true, |(held, _)| *held < key) {
+                    *slot = Some((key, v));
+                }
             }
         }
-        let mut notes: BTreeMap<NoteRef, NoteInfo> = BTreeMap::new();
+        let scratchpad = NoteInfo {
+            title: String::new(),
+            notebook: String::new(),
+            pinned: false,
+            trashed: false,
+            created: Timestamp::default(),
+            updated: Timestamp::default(),
+            updated_by: NoteRef::SCRATCHPAD.device,
+        };
+        let mut notes = BTreeMap::from([(NoteRef::SCRATCHPAD, scratchpad.clone())]);
+        let mut changes: BTreeMap<NoteRef, Fields> = BTreeMap::new();
         for op in self.all_ops().filter(|op| self.is_effective(op)) {
-            if let OpKind::NoteCreate { title } = &op.kind {
-                let info =
-                    NoteInfo { title: title.clone(), pinned: false, trashed: false, created: op.ts, updated: op.ts };
-                notes.insert(NoteRef { device: op.device, seq: op.seq }, info);
-            }
-        }
-        type MetaFields = (Field<String>, Field<bool>, Field<bool>);
-        let mut meta: BTreeMap<NoteRef, MetaFields> = BTreeMap::new();
-        for op in self.all_ops().filter(|op| self.is_effective(op)) {
-            let (note, is_meta) = match &op.kind {
-                OpKind::NoteEdit { note, .. } => (*note, false),
-                OpKind::NoteMeta { note, .. } => (*note, true),
+            let note = match &op.kind {
+                OpKind::NoteCreate { title } => {
+                    let info = NoteInfo {
+                        title: title.clone(),
+                        created: op.ts,
+                        updated: op.ts,
+                        updated_by: op.device,
+                        ..scratchpad.clone()
+                    };
+                    notes.insert(NoteRef { device: op.device, seq: op.seq }, info);
+                    continue;
+                }
+                OpKind::NoteEdit { note, .. } | OpKind::NoteMeta { note, .. } => *note,
                 _ => continue,
             };
-            let Some(info) = notes.get_mut(&note) else { continue };
-            info.updated = info.updated.max(op.ts);
-            if let (true, OpKind::NoteMeta { title, pinned, trashed, .. }) = (is_meta, &op.kind) {
+            let fields = changes.entry(note).or_default();
+            fields.updated = fields.updated.max(Some(op.order_key()));
+            if let OpKind::NoteMeta { title, notebook, pinned, trashed, .. } = &op.kind {
                 let key = (op.ts, op.device, op.seq);
-                let slots = meta.entry(note).or_default();
-                latest(&mut slots.0, key, title);
-                latest(&mut slots.1, key, pinned);
-                latest(&mut slots.2, key, trashed);
+                latest(&mut fields.title, key, title.as_deref());
+                latest(&mut fields.notebook, key, notebook.as_deref());
+                latest(&mut fields.pinned, key, *pinned);
+                latest(&mut fields.trashed, key, *trashed);
             }
         }
-        for (note, (title, pinned, trashed)) in meta {
-            let info = notes.get_mut(&note).expect("meta only for existing notes");
-            if let Some((_, t)) = title {
-                info.title = t;
+        for (note, fields) in changes {
+            let Some(info) = notes.get_mut(&note) else { continue };
+            if let Some((at, by)) = fields.updated.filter(|(at, _)| *at > info.updated) {
+                (info.updated, info.updated_by) = (at, by);
             }
-            if let Some((_, p)) = pinned {
+            // The scratchpad is always there, under its own name: it has no
+            // title or notebook and cannot be pinned or thrown away.
+            if note == NoteRef::SCRATCHPAD {
+                continue;
+            }
+            if let Some((_, t)) = fields.title {
+                info.title = t.to_string();
+            }
+            if let Some((_, n)) = fields.notebook {
+                info.notebook = n.to_string();
+            }
+            if let Some((_, p)) = fields.pinned {
                 info.pinned = p;
             }
-            if let Some((_, t)) = trashed {
+            if let Some((_, t)) = fields.trashed {
                 info.trashed = t;
             }
         }
         notes
     }
 
+    /// Does `note` exist: is it the scratchpad, or is its `NoteCreate` effective?
+    pub fn note_exists(&self, note: NoteRef) -> bool {
+        let created = |ops: &Vec<Op>| {
+            let op = ops.get(usize::try_from(note.seq.checked_sub(1)?).ok()?)?;
+            Some(matches!(op.kind, OpKind::NoteCreate { .. }) && self.is_effective(op))
+        };
+        note == NoteRef::SCRATCHPAD || self.ops.get(&note.device).and_then(created).unwrap_or(false)
+    }
+
     /// The text of `note`, built from every effective edit held, or `None`
     /// if the note does not exist. Edits are applied in the log's canonical
     /// order; the result does not depend on it.
-    pub fn note_doc(&self, note: NoteRef) -> Option<crate::notes::Doc> {
-        let created = self
-            .ops
-            .get(&note.device)
-            .and_then(|ops| ops.get(usize::try_from(note.seq.checked_sub(1)?).ok()?))
-            .is_some_and(|op| matches!(op.kind, OpKind::NoteCreate { .. }) && self.is_effective(op));
-        created.then(|| self.build_note(note))
+    pub fn note_doc(&self, note: NoteRef) -> Option<Doc> {
+        self.note_exists(note).then(|| self.build_note(note))
     }
 
     /// Every effective edit held for `note`, applied to an empty document,
@@ -587,16 +649,74 @@ impl OpLog {
     /// can arrive before the create from another). A cache rebuilt after a
     /// membership change must use this for every note any edit names, or it
     /// drops edits that came before their note's create.
-    pub fn build_note(&self, note: NoteRef) -> crate::notes::Doc {
-        let mut doc = crate::notes::Doc::new();
+    pub fn build_note(&self, note: NoteRef) -> Doc {
+        self.build_notes(&BTreeSet::from([note])).remove(&note).unwrap_or_default()
+    }
+
+    /// As [`OpLog::build_note`], for several notes in one pass over the log.
+    /// Notes with no edits are left out.
+    pub fn build_notes(&self, notes: &BTreeSet<NoteRef>) -> BTreeMap<NoteRef, Doc> {
+        let mut docs: BTreeMap<NoteRef, Doc> = BTreeMap::new();
         for op in self.all_ops().filter(|op| self.is_effective(op)) {
-            if let OpKind::NoteEdit { note: n, edit } = &op.kind {
-                if *n == note {
-                    doc.apply(op.device, edit);
+            if let OpKind::NoteEdit { note, edit } = &op.kind {
+                if notes.contains(note) {
+                    docs.entry(*note).or_default().apply(op.device, edit);
                 }
             }
         }
-        doc
+        docs
+    }
+
+    /// The effective edits of `note`, oldest first: by HLC time, then device.
+    /// An edit made after seeing another sorts after it, so any prefix of this
+    /// list is a version of the note that is complete in itself.
+    fn note_edits(&self, note: NoteRef) -> Vec<(&Op, &Edit)> {
+        let mut edits: Vec<(&Op, &Edit)> = self
+            .all_ops()
+            .filter(|op| self.is_effective(op))
+            .filter_map(|op| match &op.kind {
+                OpKind::NoteEdit { note: n, edit } if *n == note => Some((op, edit)),
+                _ => None,
+            })
+            .collect();
+        edits.sort_by_key(|(op, _)| op.order_key());
+        edits
+    }
+
+    /// The history of `note`, newest first: edits by one device in a row,
+    /// without a long break, are one revision.
+    pub fn note_history(&self, note: NoteRef) -> Vec<NoteRevision> {
+        let mut out: Vec<NoteRevision> = Vec::new();
+        for (op, edit) in self.note_edits(note) {
+            let inserted = u32::try_from(edit.inserted_chars()).unwrap_or(u32::MAX);
+            let deleted = edit.deletes.iter().map(|r| (r.to - r.from).saturating_add(1)).fold(0, u64::saturating_add);
+            let deleted = u32::try_from(deleted).unwrap_or(u32::MAX);
+            match out.last_mut() {
+                Some(r) if r.author == op.device && op.ts.wall_ms.saturating_sub(r.at.wall_ms) <= REVISION_GAP_MS => {
+                    r.at = op.ts;
+                    r.edits += 1;
+                    r.inserted = r.inserted.saturating_add(inserted);
+                    r.deleted = r.deleted.saturating_add(deleted);
+                }
+                _ => out.push(NoteRevision { author: op.device, first: op.ts, at: op.ts, edits: 1, inserted, deleted }),
+            }
+        }
+        out.reverse();
+        out.truncate(MAX_REVISIONS);
+        out
+    }
+
+    /// `note` as it was once the edit at `(at, author)` had been made: every
+    /// edit up to and including that one in history order. `None` if there is
+    /// no such edit.
+    pub fn note_at(&self, note: NoteRef, at: Timestamp, author: DeviceId) -> Option<Doc> {
+        let edits = self.note_edits(note);
+        let end = edits.iter().position(|(op, _)| op.order_key() == (at, author))?;
+        let mut doc = Doc::new();
+        for (op, edit) in &edits[..=end] {
+            doc.apply(op.device, edit);
+        }
+        Some(doc)
     }
 
     /// Every note any effective operation names (created or only edited so far).
@@ -990,12 +1110,18 @@ mod tests {
         type_into(&mut a, note, 0, 1, "H", 5_000);
         type_into(&mut b, note, 11, 0, "!", 5_000);
         b.append_local(
-            OpKind::NoteMeta { note, title: Some("Ideas, sorted".into()), pinned: Some(true), trashed: None },
+            OpKind::NoteMeta {
+                note,
+                title: Some("Ideas, sorted".into()),
+                notebook: Some("Work".into()),
+                pinned: Some(true),
+                trashed: None,
+            },
             5_100,
         )
         .unwrap();
         a.append_local(
-            OpKind::NoteMeta { note, title: Some("Older title".into()), pinned: None, trashed: None },
+            OpKind::NoteMeta { note, title: Some("Older title".into()), notebook: None, pinned: None, trashed: None },
             5_050,
         )
         .unwrap();
@@ -1008,6 +1134,79 @@ mod tests {
         let info = &a.notes()[&note];
         assert_eq!((info.title.as_str(), info.pinned, info.trashed), ("Ideas, sorted", true, false));
         assert!(a.note_doc(NoteRef { device: a.me(), seq: 99 }).is_none());
+    }
+
+    #[test]
+    fn the_scratchpad_is_one_note_for_the_whole_group() {
+        let (mut a, mut b) = pair();
+        // Each uses it before hearing from the other.
+        type_into(&mut a, NoteRef::SCRATCHPAD, 0, 0, "from a", 5_000);
+        type_into(&mut b, NoteRef::SCRATCHPAD, 0, 0, "from b", 5_000);
+        sync(&a, &mut b);
+        sync(&b, &mut a);
+        let text = a.note_doc(NoteRef::SCRATCHPAD).unwrap().text();
+        assert!(text.contains("from a") && text.contains("from b"), "{text:?}");
+        assert_eq!(b.note_doc(NoteRef::SCRATCHPAD).unwrap().text(), text);
+        // It cannot be renamed or thrown away.
+        let meta = OpKind::NoteMeta {
+            note: NoteRef::SCRATCHPAD,
+            title: Some("x".into()),
+            notebook: Some("x".into()),
+            pinned: None,
+            trashed: Some(true),
+        };
+        b.append_local(meta, 6_000).unwrap();
+        sync(&b, &mut a);
+        let info = &a.notes()[&NoteRef::SCRATCHPAD];
+        assert_eq!((info.title.as_str(), info.notebook.as_str(), info.trashed), ("", "", false));
+        assert_eq!(info.updated_by, b.me());
+    }
+
+    #[test]
+    fn history_groups_typing_and_gives_back_every_version() {
+        let (mut a, mut b) = pair();
+        let create = a.append_local(OpKind::NoteCreate { title: "n".into() }, 10_000).unwrap();
+        let note = NoteRef { device: create.device, seq: create.seq };
+        for (k, word) in ["one ", "two ", "three"].iter().enumerate() {
+            let at = a.note_doc(note).unwrap().len_chars();
+            type_into(&mut a, note, at, 0, word, 11_000 + 1_000 * k as u64);
+        }
+        sync(&a, &mut b);
+        type_into(&mut b, note, 0, 4, "", 20_000); // B deletes "one "
+        sync(&b, &mut a);
+        // A, after a break of more than two minutes.
+        type_into(&mut a, note, 9, 0, "!", 400_000);
+        sync(&a, &mut b);
+
+        let revisions = a.note_history(note);
+        assert_eq!(revisions, b.note_history(note));
+        let shape: Vec<_> = revisions.iter().map(|r| (r.author, r.edits, r.inserted, r.deleted)).collect();
+        assert_eq!(shape, [(a.me(), 1, 1, 0), (b.me(), 1, 0, 4), (a.me(), 3, 13, 0)]);
+        let text = |log: &OpLog, r: &NoteRevision| log.note_at(note, r.at, r.author).unwrap().text();
+        let texts: Vec<String> = revisions.iter().map(|r| text(&b, r)).collect();
+        assert_eq!(texts, ["two three!", "two three", "one two three"]);
+        assert!(a.note_at(note, revisions[0].at, b.me()).is_none(), "no such edit");
+    }
+
+    #[test]
+    fn note_names_are_bounded() {
+        let (mut a, _) = pair();
+        let note = NoteRef::SCRATCHPAD;
+        let meta = |title: Option<String>, notebook: Option<String>| OpKind::NoteMeta {
+            note,
+            title,
+            notebook,
+            pinned: None,
+            trashed: None,
+        };
+        let long = "x".repeat(crate::notes::MAX_TITLE_BYTES + 1);
+        assert_eq!(a.append_local(meta(Some(long.clone()), None), 1), Err(LocalError::NameTooLong));
+        let book = "x".repeat(crate::notes::MAX_NOTEBOOK_BYTES + 1);
+        assert_eq!(a.append_local(meta(Some("ok".into()), Some(book.clone())), 1), Err(LocalError::NameTooLong));
+        for kind in [meta(Some(long), None), meta(None, Some(book))] {
+            let op = Op::sign(&DeviceKey::for_test(2), 1, Timestamp::default(), kind);
+            assert!(!op_within_limits(&op), "refused from a peer too");
+        }
     }
 
     #[test]

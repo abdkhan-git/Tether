@@ -3,21 +3,12 @@ import type { TetherModule } from "./types";
 
 /**
  * Features that are designed but not built, in the order agreed in
- * docs/ROADMAP.md ("Phases"). They appear on the Modules page so the app shows
+ * docs/ROADMAP.md ("Phases"). (Notes, the first of them, is built: modules/notes.) They appear on the Modules page so the app shows
  * where it is going; each becomes a real module by adding a `view` and moving
  * it into `registry.ts`. (Drop, the shared shelf, will grow out of the
  * Transfers module, and Handoff out of Workspaces.)
  */
 export const plannedModules: TetherModule[] = [
-  {
-    id: "notes",
-    label: "Notes",
-    icon: icons.edit,
-    group: "Workspace",
-    summary: "Notes that merge live across your computers, offline included, with history and who wrote what.",
-    status: "planned",
-    note: "Next · F11",
-  },
   {
     id: "pulse",
     label: "Pulse",

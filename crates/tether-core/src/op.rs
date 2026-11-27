@@ -45,8 +45,15 @@ pub enum OpKind {
     /// Typing in a note: a batch of inserted runs and deleted characters
     /// (docs/notes-design.md). Character ids belong to this operation's seq.
     NoteEdit { note: NoteRef, edit: crate::notes::Edit },
-    /// Change a note's title, pin or trash it. Each field: the latest wins.
-    NoteMeta { note: NoteRef, title: Option<String>, pinned: Option<bool>, trashed: Option<bool> },
+    /// Change a note's title or notebook, pin or trash it. Each field: the
+    /// latest wins. An empty notebook means none.
+    NoteMeta {
+        note: NoteRef,
+        title: Option<String>,
+        notebook: Option<String>,
+        pinned: Option<bool>,
+        trashed: Option<bool>,
+    },
 }
 
 /// A note, named by the `(device, seq)` of the `NoteCreate` that made it.
@@ -54,6 +61,14 @@ pub enum OpKind {
 pub struct NoteRef {
     pub device: DeviceId,
     pub seq: u64,
+}
+
+impl NoteRef {
+    /// The scratchpad: one note that every group has from the start, so two
+    /// devices that first use it apart are writing in the same note. No
+    /// operation can create it (sequence numbers start at 1), so its name
+    /// cannot be taken.
+    pub const SCRATCHPAD: NoteRef = NoteRef { device: DeviceId([0; 32]), seq: 0 };
 }
 
 /// How old a `Send` may be when it arrives and still be applied.

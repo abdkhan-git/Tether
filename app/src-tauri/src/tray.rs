@@ -20,11 +20,19 @@ pub struct Tray {
 
 pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
     let open = MenuItem::with_id(app, "open", "Open Tether", true, None::<&str>)?;
+    let scratchpad = MenuItem::with_id(app, "scratchpad", "Scratchpad", true, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause sync", false, false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Tether", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&open, &PredefinedMenuItem::separator(app)?, &pause, &PredefinedMenuItem::separator(app)?, &quit],
+        &[
+            &open,
+            &scratchpad,
+            &PredefinedMenuItem::separator(app)?,
+            &pause,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
     )?;
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("Tether")
@@ -32,6 +40,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_window(app),
+            "scratchpad" => crate::open_scratchpad(app),
             "pause" => toggle_pause(app),
             "quit" => app.exit(0),
             _ => {}

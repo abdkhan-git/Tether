@@ -13,6 +13,8 @@ use tether_core::pairing::is_valid_code;
 use tether_core::{DeviceId, Timestamp};
 use tether_ipc as ipc;
 
+use crate::notes::{delta_view, editor_hex, note_id, spans, DeltaView, SpanView};
+
 /// Longest network address accepted from the page (an IPv6 address with a port fits easily).
 const MAX_ADDR_LEN: usize = 64;
 
@@ -181,6 +183,25 @@ pub enum Event {
         seq: u64,
         held: bool,
     },
+    /// The list of notes should be fetched again.
+    NotesChanged,
+    /// An open note's text changed. `editor` and `n` say which of this
+    /// device's edits did it, if one did.
+    NotePatch {
+        note: String,
+        from: u64,
+        to: u64,
+        delta: DeltaView,
+        authors: Vec<SpanView>,
+        editor: Option<String>,
+        n: u64,
+    },
+    /// An edit from here changed nothing (it was already so).
+    NoteNoop {
+        note: String,
+        editor: String,
+        n: u64,
+    },
     Lagged,
 }
 
@@ -197,6 +218,19 @@ impl From<ipc::Event> for Event {
             }
             ipc::Event::Received { from, author, seq, held } => {
                 Event::Received { from: from.to_hex(), author: author.to_hex(), seq, held }
+            }
+            ipc::Event::NotesChanged => Event::NotesChanged,
+            ipc::Event::NotePatch { note, from, to, change, by } => Event::NotePatch {
+                note: note_id(note),
+                from,
+                to,
+                delta: delta_view(&change.delta),
+                authors: spans(&change.authors),
+                editor: by.map(|(editor, _)| editor_hex(&editor)),
+                n: by.map_or(0, |(_, n)| n),
+            },
+            ipc::Event::NoteNoop { note, by: (editor, n) } => {
+                Event::NoteNoop { note: note_id(note), editor: editor_hex(&editor), n }
             }
             ipc::Event::Lagged { .. } => Event::Lagged,
         }

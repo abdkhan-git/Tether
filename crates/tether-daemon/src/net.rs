@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tether_core::backoff::{Outcome, Policy, Redial};
+use tether_core::limits::{op_size, MAX_OPS_PER_MESSAGE, MAX_PAGE_BYTES};
 use tether_core::{DeviceId, Message, Op};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
@@ -248,6 +249,41 @@ pub fn broadcast(ctx: &Ctx, op: Op) {
                 }
                 Ok(_) => warn!(%peer, "unexpected reply"),
                 Err(e) => warn!(%peer, error = %e, "send failed; the peer will catch up on reconnect"),
+            }
+        });
+    }
+}
+
+/// Push several new local operations to every connected peer, in as few
+/// messages as they fit. For typing in notes, so it logs only at debug level.
+pub fn broadcast_all(ctx: &Ctx, ops: Vec<Op>) {
+    let mut pages: Vec<Vec<Op>> = Vec::new();
+    let mut bytes = 0;
+    for op in ops {
+        let size = op_size(&op);
+        match pages.last_mut() {
+            Some(page) if page.len() < MAX_OPS_PER_MESSAGE && bytes + size <= MAX_PAGE_BYTES => {
+                bytes += size;
+                page.push(op);
+            }
+            _ => {
+                bytes = size;
+                pages.push(vec![op]);
+            }
+        }
+    }
+    if pages.is_empty() {
+        return;
+    }
+    for (peer, conn) in ctx.peers() {
+        let pages = pages.clone();
+        tokio::spawn(async move {
+            // In order: a later page would only be refused as a gap.
+            for ops in pages {
+                if let Err(e) = request(&conn, &Message::Ops { ops, more: false }).await {
+                    debug!(%peer, error = %e, "send failed; the peer will catch up on reconnect");
+                    return;
+                }
             }
         });
     }

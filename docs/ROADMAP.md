@@ -59,7 +59,7 @@ Each feature is something the user does in the Tether window or tray, not only s
 | Anywhere | Alt+Shift+V in any app: search history from every device, Enter to paste it here | F1 | Done |
 | Devices | Pair with a six-digit code, rename, revoke, see live round-trip time | P0/P1 | Done |
 | Tray | Pause sync, open at sign-in, notifications | P1 | Done |
-| Notes | Write notes that merge live across devices, offline included; history; who wrote what; floating scratchpad | F11 | Next |
+| Notes | Write notes that merge live across devices, offline included; Markdown and checklists; notebooks, pins, trash; history and restore; who wrote what; floating scratchpad (Alt+Shift+N) | F11 | Done (single machine; the two-machine check waits for the laptop) |
 | Pulse | See every computer's health and activity; wake a sleeping one | F10 | Planned (P3) |
 | Shelf | Drag anything onto the shelf; drag it out on another computer | F4 | Planned (P3) |
 | Compute | Run a supported job on the best device; watch it; cancel | F8 | Planned (P3) |

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scratch-open"
+description = "Enables the scratch_open command without any pre-configured scope."
+commands.allow = ["scratch_open"]
+
+[[permission]]
+identifier = "deny-scratch-open"
+description = "Denies the scratch_open command without any pre-configured scope."
+commands.deny = ["scratch_open"]

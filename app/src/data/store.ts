@@ -76,6 +76,8 @@ export interface TetherState {
   paused: boolean;
   /** The quick paste shortcut: a string when registered, "" when another app holds it, null where unknown. */
   paletteShortcut: string | null;
+  /** The scratchpad shortcut, the same way. */
+  scratchpadShortcut: string | null;
   /** Notifications for copies from other devices. Null where unknown (browser preview). */
   notifications: boolean | null;
   /** Tether opens at sign-in. Null where that cannot be known (browser preview). */
@@ -169,6 +171,7 @@ export const useTether = create<TetherState>((set, get) => ({
   autostart: null,
   notifications: null,
   paletteShortcut: null,
+  scratchpadShortcut: null,
   transfers: mock.transfers,
   workspaces: mock.workspaces,
   ops: mock.ops,

@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 use crate::api;
+use crate::notes::NoteCache;
 use crate::store::Store;
 use crate::tls::{SharedGate, TlsIdentity};
 
@@ -82,6 +83,8 @@ pub struct State {
     /// Sync is paused: local copies are not recorded, and peers' copies are
     /// not put on the system clipboard (they still arrive in history).
     pub paused: bool,
+    /// Notes open in an editor here (`notes.rs`).
+    pub notes: NoteCache,
     store: Option<Store>,
 }
 
@@ -106,10 +109,15 @@ pub struct Ctx {
 /// Strip control and direction-changing characters from a name a peer chose,
 /// and bound its length. Names are shown to the user, never trusted.
 pub fn clean_name(name: &str) -> String {
+    clean_text(name, MAX_NAME_BYTES)
+}
+
+/// The same for any one-line text a peer chose, of at most `max` bytes.
+pub fn clean_text(name: &str, max: usize) -> String {
     let mut out = String::new();
     for c in name.chars().filter(|c| !c.is_control() && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
     {
-        if out.len() + c.len_utf8() > MAX_NAME_BYTES {
+        if out.len() + c.len_utf8() > max {
             break;
         }
         out.push(c);
@@ -142,6 +150,7 @@ impl Ctx {
             pairing: None,
             pinned: HashSet::new(),
             paused: false,
+            notes: NoteCache::new(),
             store,
         };
         let (events, _) = broadcast::channel(EVENT_QUEUE);
@@ -195,6 +204,15 @@ impl Ctx {
         if let Some(store) = s.store.as_mut() {
             if let Err(e) = store.append(op) {
                 error!(error = %e, "could not persist an operation; it will be re-fetched from peers");
+            }
+        }
+    }
+
+    /// As `persist`, for several operations in one transaction.
+    pub(crate) fn persist_all(s: &mut State, ops: &[Op]) {
+        if let (Some(store), false) = (s.store.as_mut(), ops.is_empty()) {
+            if let Err(e) = store.append_all(ops) {
+                error!(error = %e, "could not persist operations; they will be re-fetched from peers");
             }
         }
     }
@@ -275,6 +293,9 @@ impl Ctx {
                         error!(error = %e, "could not persist operations; they will be re-fetched from peers");
                     }
                 }
+            }
+            if out.applied > 0 {
+                self.absorb_notes(&mut s, &fresh, out.membership_changed);
             }
             let me = s.log.me();
             let trust = s.log.trust();
@@ -575,6 +596,7 @@ impl Ctx {
             }
             s.pinned.insert(inviter);
             s.names.insert(inviter, clean_name(name));
+            self.absorb_notes(&mut s, &[], true);
         }
         self.refresh_gate();
         Ok(())
@@ -599,6 +621,7 @@ impl Ctx {
                 store.rewrite(ops.iter())?;
             }
             s.pinned.remove(&device);
+            self.absorb_notes(&mut s, &[], true);
             op
         };
         self.refresh_gate();
@@ -607,7 +630,7 @@ impl Ctx {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::sync::RwLock;
@@ -620,7 +643,7 @@ mod tests {
     }
 
     /// A daemon context with no network, recording what it delivers.
-    fn ctx() -> (Ctx, Arc<Mutex<Vec<Delivered>>>) {
+    pub(crate) fn ctx() -> (Ctx, Arc<Mutex<Vec<Delivered>>>) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let key = DeviceKey::for_test(1);
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -629,6 +652,17 @@ mod tests {
         let tls = crate::tls::identity(&key).unwrap();
         let gate = Arc::new(RwLock::new(crate::tls::Gate::default()));
         (Ctx::new(OpLog::new(key), "test".into(), None, gate, tls, Arc::new(SystemClock), deliver), seen)
+    }
+
+    /// Another member of `ctx`'s group, with nothing of its own yet.
+    pub(crate) fn peer_of(ctx: &Ctx, n: u64) -> OpLog {
+        let key = DeviceKey::for_test(n);
+        let now = ctx.clock.now_ms();
+        let add = OpKind::DeviceAdded { device: key.id(), name: format!("peer {n}") };
+        ctx.lock().log.append_local(add, now).unwrap();
+        let mut peer = OpLog::new(key);
+        peer.set_root(ctx.me());
+        peer
     }
 
     #[test]

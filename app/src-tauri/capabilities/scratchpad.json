@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "scratchpad",
+  "description": "The floating scratchpad: read and type in the scratchpad note (two commands that take no note name), move and hide its window. No other note, no clipboard history, no devices, nothing for remote pages.",
+  "windows": ["scratchpad"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-theme",
+    "allow-scratch-open",
+    "allow-scratch-edit"
+  ]
+}

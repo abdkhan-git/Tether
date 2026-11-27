@@ -12,6 +12,7 @@ mod input;
 mod ipc;
 mod keystore;
 mod net;
+mod notes;
 mod pair;
 mod store;
 mod tls;

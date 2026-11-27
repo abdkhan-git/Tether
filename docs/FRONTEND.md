@@ -93,9 +93,20 @@ Tether is a set of modules on one synced core. The top navigation, the search fl
 
 Users can turn any non-core module off from the Modules page (the grid button in the title bar); the choice is stored locally.
 
+### Notes (`app/src/modules/notes`, `app/src/lib/notes`)
+
+- **Editor:** a plain textarea driven by a `NoteSession` (`lib/notes/session.ts`), which batches typing (150 ms), keeps one edit in flight, carries incoming changes over what is unsent, and undoes only what was typed here (Ctrl+Z, Ctrl+Y). No DOM in the session: it is unit-tested against a stand-in daemon (`fake-daemon.ts`) with lag, lost answers, restarts and an input method. Deltas (`delta.ts`) mirror the Rust ones and are checked against cases the Rust tests generate.
+- **Keys:** Enter continues a list or checklist (an empty item ends it), Tab and Shift+Tab indent, Ctrl+B and Ctrl+I wrap the selection, Ctrl+Enter ticks the checklist item under the caret.
+- **Views:** Write, Read (Markdown from `lib/notes/markdown.ts`, rendered as React elements, never HTML; checkboxes tick the source; links go through `open_link`) and History (revisions by device, any version shown with who wrote it, restore as a new change).
+- **Who wrote what:** a tint layer under the textarea (`.note-stack` in `index.css`), off until asked for. Tints `--author-0..5`: this device is a neutral grey, others muted teal, clay, rose, moss and stone (no green, red, blue, purple or gold).
+- **Hidden characters** from other devices (escape codes, direction overrides, a lone carriage return) are shown as visible stand-ins of the same length (`visible()` in session.ts), so the textarea and the note line up one to one.
+- **Secrets:** when the daemon finds a key or token in an edit, the page asks "Take it out" / "Keep it in the note" before anything is recorded.
+- **Scratchpad:** a third window (label `scratchpad`, `app/src/scratchpad/`), Alt+Shift+N or the tray, floating and frameless, Esc puts it away. In the browser preview, `?scratchpad`.
+- **Preview:** `data/notes.ts` holds sample notes in the browser, and another "device" types into one every few seconds, so merging and tints can be seen without the app.
+
 ### Planned modules
 
-`app/src/modules/planned.ts` lists features that are designed but not built, in the order agreed in ROADMAP.md (Notes, Pulse, Compute, Drive, Rules, Timeline, then Vault and Spaces). Each needs its own threat model before it is built. Drop (the shared shelf) grows out of the Transfers module and Handoff out of Workspaces; both are shown under "Coming" inside the app.
+`app/src/modules/planned.ts` lists features that are designed but not built, in the order agreed in ROADMAP.md (Pulse, Compute, Drive, Rules, Timeline, then Vault and Spaces; Notes is built). Each needs its own threat model before it is built. Drop (the shared shelf) grows out of the Transfers module and Handoff out of Workspaces; both are shown under "Coming" inside the app.
 
 ## Data layer
 
@@ -104,11 +115,11 @@ Users can turn any non-core module off from the Modules page (the grid button in
 - **In the desktop app** (`main.tsx` checks `inDesktopApp`), `live.ts` swaps in the daemon backend. `daemon.ts` is the typed bridge: one function per Tauri command, and listeners for `tether://event` (new copies, device changes, pause) and `tether://link` (whether the daemon can be reached). `map.ts` turns daemon shapes into UI shapes and is unit-tested. Round trips are re-read every 3 s while the window is visible.
 - **In a browser**, the preview backend and `startMockDaemon()` simulate peers copying text, transfer progress and latency jitter.
 
-Modules carry `daemon: true` when the daemon implements what they show (Overview, Clipboard, Devices, Diagnostics). Inside the app the others (Transfers, Workspaces) are listed under "Coming" on the Modules page instead of showing sample data. Pin and "Delete everywhere" go through the daemon (signed operations merged on every device; see SECURITY.md, "Pins and deletes"). "Keep on this device" for an item already synced and "push to one device" are preview-only and hidden in the app.
+Modules carry `daemon: true` when the daemon implements what they show (Overview, Clipboard, Notes, Devices, Diagnostics). Inside the app the others (Transfers, Workspaces) are listed under "Coming" on the Modules page instead of showing sample data. Pin and "Delete everywhere" go through the daemon (signed operations merged on every device; see SECURITY.md, "Pins and deletes"). "Keep on this device" for an item already synced and "push to one device" are preview-only and hidden in the app.
 
 ### The desktop shell (`app/src-tauri`)
 
-- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `rename_device`, `set_paused`, `set_pinned`, `delete_item`, `send_item`, `copy_here`, `open_link`, `autostart`, `set_autostart`, `notifications`, `set_notifications`, `palette_shortcut`, and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to the capability of each window that needs it (`capabilities/main.json`, `capabilities/palette.json`); without all three the page cannot call it.
+- **Commands:** `status`, `devices`, `history`, `pair`, `join`, `revoke`, `rename_device`, `set_paused`, `set_pinned`, `delete_item`, `send_item`, `copy_here`, `open_link`, `autostart`, `set_autostart`, `notifications`, `set_notifications`, `palette_shortcut`, `scratchpad_shortcut`, `show_scratchpad`, the notes commands (`notes`, `note_create`, `note_open`, `note_edit`, `note_meta`, `note_history`, `note_at`, `note_restore`), and the scratchpad window's two (`scratch_open`, `scratch_edit`), and nothing else. Adding one means adding it to `generate_handler!` in `main.rs`, to `COMMANDS` in `build.rs`, and its `allow-<name>` permission to the capability of each window that needs it (`capabilities/main.json`, `capabilities/palette.json`); without all three the page cannot call it.
 - **Rules for the page** (SECURITY.md, "Desktop app"): no remote content, no inline `<style>` or `<script>` (the CSP blocks them), links only through `backend.openLink`, never `window.open` or `<a href>` to outside pages (the window refuses to navigate away from the app).
 - **Window:** closing it hides it to the tray. Tray menu: Open Tether, Pause sync, Quit Tether. Its state always comes from the daemon.
 - **Quick paste palette:** a second window (label `palette`, `app/src/palette/`), hidden until Alt+Shift+V; `main.tsx` mounts the palette instead of the app in that window (or with `?palette` in the browser preview). Its capability grants only status, devices, history and `copy_here`. Copying a history item here (palette, "Copy to this PC", search) goes through the daemon (`copy_here`), so it is not recorded as a new copy; derived text (formatted JSON, a link without trackers) still uses the browser clipboard, because it is new content.

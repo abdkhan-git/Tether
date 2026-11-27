@@ -14,6 +14,7 @@
 mod guard;
 mod link;
 mod login;
+mod notes;
 mod notify;
 mod tray;
 mod view;
@@ -35,13 +36,17 @@ const EVENT: &str = "tether://event";
 const LINK: &str = "tether://link";
 /// Tells the palette window to start a fresh search.
 const PALETTE_OPEN: &str = "palette://open";
+/// Tells the scratchpad window to focus its text.
+const SCRATCHPAD_OPEN: &str = "scratchpad://open";
+/// The scratchpad shortcut: the same two keys as quick paste, N for notes.
+const SCRATCHPAD_SHORTCUT: &str = "Alt+Shift+N";
 /// The quick paste shortcut. Not Ctrl+Shift+V: browsers, Office and editors
 /// use that for "paste as plain text", and a global shortcut would take it.
 const PALETTE_SHORTCUT: &str = "Alt+Shift+V";
 
-type Res<T> = Result<T, String>;
+pub(crate) type Res<T> = Result<T, String>;
 
-fn unexpected(reply: Reply) -> String {
+pub(crate) fn unexpected(reply: Reply) -> String {
     format!("unexpected reply from tetherd: {reply:?}")
 }
 
@@ -107,12 +112,29 @@ async fn copy_here(link: State<'_, Arc<Link>>, author: String, seq: u64) -> Res<
     }
 }
 
-/// The quick paste shortcut, if it could be registered (another app may hold it).
-struct PaletteShortcut(std::sync::Mutex<Option<String>>);
+/// The global shortcuts that could be registered (another app may hold one).
+struct Shortcuts(std::sync::Mutex<Vec<&'static str>>);
+
+impl Shortcuts {
+    fn held(&self, shortcut: &'static str) -> Option<&'static str> {
+        self.0.lock().ok().filter(|s| s.contains(&shortcut)).map(|_| shortcut)
+    }
+}
 
 #[tauri::command]
-fn palette_shortcut(shortcut: State<'_, PaletteShortcut>) -> Option<String> {
-    shortcut.0.lock().ok().and_then(|s| s.clone())
+fn palette_shortcut(shortcuts: State<'_, Shortcuts>) -> Option<&'static str> {
+    shortcuts.held(PALETTE_SHORTCUT)
+}
+
+#[tauri::command]
+fn scratchpad_shortcut(shortcuts: State<'_, Shortcuts>) -> Option<&'static str> {
+    shortcuts.held(SCRATCHPAD_SHORTCUT)
+}
+
+/// Show the scratchpad window.
+#[tauri::command]
+fn show_scratchpad(app: AppHandle) {
+    open_scratchpad(&app);
 }
 
 #[tauri::command]
@@ -337,23 +359,68 @@ fn palette_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Register the quick paste shortcut. If another app holds it, the app runs
-/// on without it and the page says so (palette_shortcut returns None).
-fn register_palette_shortcut(app: &AppHandle) {
+/// Register a global shortcut. If another app holds it, the app runs on
+/// without it and the page says so (its command returns None).
+fn register_shortcut(app: &AppHandle, shortcut: &'static str, pressed: fn(&AppHandle)) {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let result = app.global_shortcut().on_shortcut(PALETTE_SHORTCUT, |app, _shortcut, event| {
+    let result = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            open_palette(app);
+            pressed(app);
         }
     });
     match result {
         Ok(()) => {
-            if let Ok(mut slot) = app.state::<PaletteShortcut>().0.lock() {
-                *slot = Some(PALETTE_SHORTCUT.to_string());
+            if let Ok(mut held) = app.state::<Shortcuts>().0.lock() {
+                held.push(shortcut);
             }
-            info!(shortcut = PALETTE_SHORTCUT, "quick paste shortcut registered");
+            info!(shortcut, "shortcut registered");
         }
-        Err(e) => warn!(shortcut = PALETTE_SHORTCUT, error = %e, "could not register the quick paste shortcut"),
+        Err(e) => warn!(shortcut, error = %e, "could not register a shortcut"),
+    }
+}
+
+/// The scratchpad: a small note that floats over whatever app is in front.
+/// It stays until it is put away (Esc, or its shortcut again): it is for
+/// typing in while looking at something else.
+fn scratchpad_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = guarded(WebviewWindowBuilder::new(app, "scratchpad", WebviewUrl::App("index.html".into())))
+        .title("Tether scratchpad")
+        .visible(false)
+        .focused(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(true)
+        .inner_size(420.0, 380.0)
+        .min_inner_size(280.0, 200.0)
+        .center()
+        .build()?;
+    let hide = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = hide.hide();
+        }
+    });
+    Ok(())
+}
+
+/// Show the scratchpad in front, ready to type in.
+fn open_scratchpad(app: &AppHandle) {
+    if let Some(pad) = app.get_webview_window("scratchpad") {
+        let _ = pad.show();
+        let _ = pad.set_focus();
+        let _ = pad.emit_to("scratchpad", SCRATCHPAD_OPEN, ());
+    }
+}
+
+/// The shortcut puts the scratchpad away if it is in front, and shows it otherwise.
+fn toggle_scratchpad(app: &AppHandle) {
+    match app.get_webview_window("scratchpad") {
+        Some(pad) if pad.is_visible().unwrap_or(false) && pad.is_focused().unwrap_or(false) => {
+            let _ = pad.hide();
+        }
+        _ => open_scratchpad(app),
     }
 }
 
@@ -411,9 +478,9 @@ fn main() {
     let app = builder
         // Used from Rust only (notify_event): its commands are not granted to the page.
         .plugin(tauri_plugin_notification::init())
-        // The palette shortcut, registered in `setup`. Rust side only.
+        // The palette and scratchpad shortcuts, registered in `setup`. Rust side only.
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .manage(PaletteShortcut(std::sync::Mutex::new(None)))
+        .manage(Shortcuts(std::sync::Mutex::new(Vec::new())))
         .manage(LoginEntry(login::entry(&profile)))
         .manage(AppSettings {
             profile: profile.clone(),
@@ -439,13 +506,27 @@ fn main() {
             notifications,
             set_notifications,
             copy_here,
-            palette_shortcut
+            palette_shortcut,
+            scratchpad_shortcut,
+            show_scratchpad,
+            notes::notes,
+            notes::note_create,
+            notes::note_open,
+            notes::note_edit,
+            notes::note_meta,
+            notes::note_history,
+            notes::note_at,
+            notes::note_restore,
+            notes::scratch_open,
+            notes::scratch_edit
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
             main_window(&handle, hidden)?;
             palette_window(&handle)?;
-            register_palette_shortcut(&handle);
+            scratchpad_window(&handle)?;
+            register_shortcut(&handle, PALETTE_SHORTCUT, open_palette);
+            register_shortcut(&handle, SCRATCHPAD_SHORTCUT, toggle_scratchpad);
             let tray = tray::build(&handle)?;
             app.manage(tray);
             info!(%profile, "Tether started");
@@ -462,11 +543,18 @@ fn main() {
                     if let tether_ipc::Event::Clipboard(item) = &event {
                         notify_event(&events_to, Notice::Copy(item.clone()));
                     }
-                    let _ = events_to.emit_to("main", EVENT, view::Event::from(event));
+                    let for_scratchpad = notes::for_scratchpad(&event);
+                    let event = view::Event::from(event);
+                    if for_scratchpad {
+                        let _ = events_to.emit_to("scratchpad", EVENT, event.clone());
+                    }
+                    let _ = events_to.emit_to("main", EVENT, event);
                 },
                 move |state| {
                     tray::refresh(&state_to);
-                    let _ = state_to.emit_to("main", LINK, state.clone());
+                    for window in ["main", "scratchpad"] {
+                        let _ = state_to.emit_to(window, LINK, state.clone());
+                    }
                 },
             ));
             Ok(())

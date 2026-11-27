@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scratch-edit"
+description = "Enables the scratch_edit command without any pre-configured scope."
+commands.allow = ["scratch_edit"]
+
+[[permission]]
+identifier = "deny-scratch-edit"
+description = "Denies the scratch_edit command without any pre-configured scope."
+commands.deny = ["scratch_edit"]

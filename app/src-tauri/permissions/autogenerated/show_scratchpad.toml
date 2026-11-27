@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-scratchpad"
+description = "Enables the show_scratchpad command without any pre-configured scope."
+commands.allow = ["show_scratchpad"]
+
+[[permission]]
+identifier = "deny-show-scratchpad"
+description = "Denies the show_scratchpad command without any pre-configured scope."
+commands.deny = ["show_scratchpad"]

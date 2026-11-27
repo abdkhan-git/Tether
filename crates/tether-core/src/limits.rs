@@ -1,7 +1,7 @@
 //! Hard limits on everything a peer can send. Every decoded message is checked
 //! against these before any of it is used (SECURITY.md, rule 6).
 
-use crate::notes::MAX_TITLE_BYTES;
+use crate::notes::{MAX_NOTEBOOK_BYTES, MAX_TITLE_BYTES};
 use crate::{Op, OpKind};
 
 /// Largest clipboard text that syncs. Bigger content belongs to file transfer.
@@ -33,7 +33,9 @@ pub fn op_size(op: &Op) -> usize {
             OpKind::NoteEdit { edit, .. } => {
                 edit.inserts.iter().map(|r| r.text.len() + 48).sum::<usize>() + edit.deletes.len() * 48
             }
-            OpKind::NoteMeta { title, .. } => title.as_ref().map_or(0, String::len),
+            OpKind::NoteMeta { title, notebook, .. } => {
+                title.as_ref().map_or(0, String::len) + notebook.as_ref().map_or(0, String::len)
+            }
         }
 }
 
@@ -46,6 +48,9 @@ pub fn op_within_limits(op: &Op) -> bool {
             OpKind::DeviceRevoked { .. } | OpKind::Pin { .. } | OpKind::Delete { .. } | OpKind::Send { .. } => true,
             OpKind::NoteCreate { title } => title.len() <= MAX_TITLE_BYTES,
             OpKind::NoteEdit { edit, .. } => edit.within_limits() && edit.ids_belong_to(op.seq),
-            OpKind::NoteMeta { title, .. } => !matches!(title, Some(t) if t.len() > MAX_TITLE_BYTES),
+            OpKind::NoteMeta { title, notebook, .. } => {
+                title.as_ref().map_or(true, |t| t.len() <= MAX_TITLE_BYTES)
+                    && notebook.as_ref().map_or(true, |n| n.len() <= MAX_NOTEBOOK_BYTES)
+            }
         }
 }

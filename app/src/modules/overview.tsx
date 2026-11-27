@@ -123,7 +123,7 @@ function Stat({ label, value, decimals = 0, suffix, hint }: { label: string; val
 
 /** This device's identity and the pause switch (desktop app only). */
 function ThisDevice() {
-  const { devices, me, paused, setPaused, toast, autostart, notifications, paletteShortcut, backend } = useTether();
+  const { devices, me, paused, setPaused, toast, autostart, notifications, paletteShortcut, scratchpadShortcut, backend } = useTether();
   const self = devices.find((d) => d.id === me);
   const setAutostart = (on: boolean) => void backend.setAutostart(on).catch((e) => toast("Could not change the login setting", errorText(e)));
   const setNotifications = (on: boolean) => void backend.setNotifications(on).catch((e) => toast("Could not change notifications", errorText(e)));
@@ -163,6 +163,19 @@ function ThisDevice() {
               </p>
             </div>
             {paletteShortcut && <Kbd>{paletteShortcut}</Kbd>}
+          </div>
+        )}
+        {scratchpadShortcut !== null && (
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium">Scratchpad</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {scratchpadShortcut
+                  ? "From any app: a small note that floats in front, the same on every device."
+                  : "The shortcut is taken by another app; open the scratchpad from the tray or the Notes page."}
+              </p>
+            </div>
+            {scratchpadShortcut && <Kbd>{scratchpadShortcut}</Kbd>}
           </div>
         )}
         {notifications !== null && (

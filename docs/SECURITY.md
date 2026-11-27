@@ -4,7 +4,7 @@ Tether runs on every computer a person owns, can type into them, and holds what 
 
 No one can promise software with zero vulnerabilities. This document makes a narrower promise that we can keep: a small attack surface, defence in depth, explicit rules that every change follows, and checks in CI that enforce them.
 
-## Current status (2026-11-23)
+## Current status (2026-11-26)
 
 Phase P0 is complete. The five issues found in the stage 1 prototype are fixed, each with a test that fails if the fix regresses:
 
@@ -155,7 +155,8 @@ Mitigations:
   - Before authentication the server sends only a protocol version and a random nonce.
   - Length-prefixed postcard frames with hard limits, strict decoding, and fail-closed
     handling: any bad frame closes the connection.
-Limits: 8 clients at once; 5 s to authenticate; requests up to 16 KiB; replies up to 4 MiB;
+Limits: 8 clients at once; 5 s to authenticate; requests up to 320 KiB (16 KiB until Notes:
+  a paste that fills a note must fit one request); replies up to 4 MiB;
   history pages of at most 100 items and about 2 MiB; 10 s to write a reply; 256 queued
   events per subscriber, after which the subscriber is told it lagged.
 Test or invariant proving the main property:
@@ -545,6 +546,60 @@ Test or invariant proving the main property: control_e2e::copy_here_puts_an_old_
   protocol: the palette window's capability refuses pin, delete, send and rename.
 Residual risk the user should know about: anyone at the unlocked computer can open the
   palette and read history, as they could open the main window.
+```
+
+### Notes and the scratchpad (P3, F11)
+
+```
+Feature: notes that several devices edit at once, offline included (crates/tether-core:
+  notes.rs Fugue CRDT, delta.rs and live.rs for editors; daemon notes.rs; app notes.rs,
+  modules/notes, scratchpad window). Design: docs/notes-design.md.
+Capability it needs: none new. A note edit is a signed operation from a member, like a
+  clipboard copy; it acts on nothing outside Tether.
+What an attacker gains if it is abused: rewriting or hiding what the user wrote; filling
+  every device's disk or memory with one huge note; slipping misleading text (direction
+  overrides, escape codes) or a link into a note; a secret the user pasted reaching every
+  device and staying in their history; a page script with access to every note.
+Who could abuse it: a compromised member; a stranger forging edits; content written by a
+  peer; the scratchpad window if its page were taken over; a buggy or hostile local client.
+Mitigations:
+  - Every edit is signed, verified and from a member; a revoked device's later edits are
+    dropped everywhere and open editors are shown the rebuilt text (simulator, unit test).
+  - Character ids are derived from the signed operation's seq and checked on decode, so a
+    device cannot reuse an id to make devices disagree (`Edit::ids_belong_to`).
+  - Limits: 4 KiB of text, 1,024 runs and ranges, 65,536 deleted characters per edit;
+    256 KiB of text per note when typing (a note merged past that may shrink, not grow);
+    a note over 1 MiB is not opened (a peer filling one on purpose closes it here); 4,096
+    notes; titles 200 bytes and notebooks 64, cleaned of control and direction characters.
+  - Typing is batched (one signed operation per 150 ms burst in the editor) and the daemon
+    spaces signed edits at least 25 ms apart whatever a client sends.
+  - Secrets: an edit that inserts something shaped like a key, token or private key (or a
+    pasted password) is not recorded until the user answers "Keep it in the note", because
+    notes go to every device and keep their history. A token finished key by key counts.
+  - Shown as text: the editor is a plain textarea, and invisible characters (escape codes,
+    direction overrides) are shown as visible stand-ins. The Markdown view renders React
+    elements only, never HTML; links are buttons that go through open_link (http, https,
+    mailto); its parser is bounded (no backtracking, inline markup read in the first 4,000
+    characters of a line, nesting stops at 4).
+  - Edit replay is harmless: each editor's edits are numbered and made once.
+  - The scratchpad window has its own capability: two commands that take no note name
+    (scratch_open, scratch_edit), plus moving and hiding itself. It receives only the
+    scratchpad's events. The scratchpad's name is not one an operation can create.
+  - Nothing typed in a note reaches a log file (checked in notes_e2e).
+Limits: as above; history lists the newest 500 revisions.
+Test or invariant proving the main property: simulator check_notes (convergence, nothing lost,
+  live copy equals the log, editors that lag behind equal the note, every version in the
+  history is complete, metadata against an oracle, forged edits never stick); tether-core
+  notes, delta, live tests (property tests, including exact change reporting); daemon
+  notes::tests and tests/notes_e2e.rs (two real daemons; secrets wait for the user; full
+  note and pacing; nothing logged); app notes::tests (ids and deltas from the page are
+  checked; the scratchpad window hears about the scratchpad only); page tests (session
+  against a stand-in daemon with lag, faults and restarts; Markdown on hostile input).
+Residual risk the user should know about: deleting text from a note does not remove it
+  from the log: it stays in every device's (encrypted) history until compaction (P2.2).
+  The secret check is pattern-based. A member can still write anything into a shared note,
+  as it can copy anything; revoking it removes what it wrote after the cutoff. Pausing sync
+  pauses the clipboard, not notes.
 ```
 
 ## Threat model template (one per feature)

@@ -130,6 +130,24 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
     None
 }
 
+/// The kind of secret an edit puts into a note, if any. `inserted` is the text
+/// it inserts; `around` is that text with the rest of the words it touches, so
+/// that a token completed key by key is seen too. Notes are long-lived and go
+/// to every device, so the user is asked before one of these is recorded.
+pub fn secret_in_note(inserted: &str, around: &str) -> Option<&'static str> {
+    if let Some((_, name)) = SECRET_PREFIXES.iter().find(|(prefix, _)| around.contains(prefix)) {
+        return Some(name);
+    }
+    // Bounded by the size of an edit, so every word is looked at.
+    if let Some(found) = around.split_whitespace().find_map(secret_token) {
+        return Some(found);
+    }
+    // A lone password-like token counts only when it arrives whole (a paste):
+    // while typing, half the words with a digit and a symbol would look like one.
+    let pasted = inserted.trim();
+    looks_like_password(pasted).then_some("password")
+}
+
 /// Characters that change how text displays or how a terminal behaves:
 /// C0/C1 controls (escape sequences) and Unicode bidirectional overrides
 /// ("Trojan Source"). Newlines and tabs are fine.
@@ -302,6 +320,21 @@ mod tests {
         ] {
             assert_eq!(secret_kind(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn secrets_are_noticed_on_their_way_into_a_note() {
+        let token = format!("ghp_{}", "a".repeat(36));
+        assert_eq!(secret_in_note(&token, &format!("key: {token}")), Some("GitHub token"));
+        // Finished by hand: only the last character is inserted.
+        assert_eq!(secret_in_note("a", &token), Some("GitHub token"));
+        assert_eq!(secret_in_note("Xk9#mQ2$vL7pR4", "Xk9#mQ2$vL7pR4"), Some("password"), "pasted");
+        assert_eq!(secret_in_note("4", "Xk9#mQ2$vL7pR4"), None, "typed: too many words look like this");
+        assert_eq!(secret_in_note("buy milk", "buy milk tomorrow"), None);
+        let key = "-----BEGIN PRIVATE KEY-----\\nabc";
+        assert_eq!(secret_in_note(key, key), Some("private key"));
+        let far = format!("{} {token}", "word ".repeat(20_000));
+        assert_eq!(secret_in_note(&far, &far), Some("GitHub token"), "however far into a paste");
     }
 
     #[test]

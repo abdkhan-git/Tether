@@ -52,6 +52,14 @@ import {
   ArrowUpRight01Icon,
   MagicWand01Icon,
   TextWrapIcon,
+  Note01Icon,
+  UndoIcon,
+  RedoIcon,
+  Book02Icon,
+  CheckListIcon,
+  ViewIcon,
+  RestoreBinIcon,
+  StickyNote01Icon,
 } from "@hugeicons/core-free-icons";
 import type { Connection, Platform } from "@/data/types";
 
@@ -105,6 +113,14 @@ export const icons = {
   wand: MagicWand01Icon,
   wrap: TextWrapIcon,
   alert: Alert02Icon,
+  note: Note01Icon,
+  undo: UndoIcon,
+  redo: RedoIcon,
+  notebook: Book02Icon,
+  checklist: CheckListIcon,
+  view: ViewIcon,
+  restore: RestoreBinIcon,
+  sticky: StickyNote01Icon,
 } as const;
 
 export const platformGlyph: Record<Platform, typeof ComputerIcon> = {

@@ -41,6 +41,15 @@
   --syn-function: #326d74;
   --syn-attr: #815f03;
   --syn-meta: #643820;
+
+  /* Who wrote what in a note, shown only when asked for. Muted, distinct, and
+     none of them green (connected), red (destructive), blue, purple or gold. */
+  --author-0: rgba(0, 0, 0, 0.07);
+  --author-1: rgba(42, 150, 140, 0.2);
+  --author-2: rgba(200, 120, 80, 0.22);
+  --author-3: rgba(195, 105, 140, 0.2);
+  --author-4: rgba(120, 150, 80, 0.22);
+  --author-5: rgba(140, 130, 120, 0.24);
 }
 
 [data-theme="dark"] {
@@ -72,6 +81,13 @@
   --syn-function: #67b7a4;
   --syn-attr: #ffa14f;
   --syn-meta: #fd8f3f;
+
+  --author-0: rgba(255, 255, 255, 0.08);
+  --author-1: rgba(70, 190, 175, 0.24);
+  --author-2: rgba(230, 140, 95, 0.24);
+  --author-3: rgba(230, 125, 165, 0.22);
+  --author-4: rgba(150, 190, 100, 0.22);
+  --author-5: rgba(190, 180, 170, 0.2);
 }
 
 @theme inline {
@@ -174,6 +190,107 @@
   -webkit-backdrop-filter: blur(24px) saturate(160%);
   backdrop-filter: blur(24px) saturate(160%);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* ---------- Notes ---------- */
+
+/* The editor: a textarea over a layer that tints who wrote what. Both sit in
+   one grid cell with the same metrics, so the tints line up with the text. */
+.note-stack {
+  display: grid;
+}
+.note-stack > * {
+  grid-area: 1 / 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.7;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+.note-stack textarea {
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--foreground);
+  outline: none;
+  min-height: 320px;
+  user-select: text;
+}
+.note-stack .note-layer {
+  color: transparent;
+  pointer-events: none;
+}
+.note-layer span {
+  border-radius: 3px;
+}
+.author-0 { background: var(--author-0); }
+.author-1 { background: var(--author-1); }
+.author-2 { background: var(--author-2); }
+.author-3 { background: var(--author-3); }
+.author-4 { background: var(--author-4); }
+.author-5 { background: var(--author-5); }
+.author-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px var(--border-hover);
+}
+
+/* Rendered Markdown. Text from the note is always rendered as text. */
+.note-read {
+  font-size: 15px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.note-read h1, .note-read h2, .note-read h3, .note-read h4 {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin: 1.2em 0 0.45em;
+}
+.note-read h1 { font-size: 1.7em; }
+.note-read h2 { font-size: 1.35em; }
+.note-read h3 { font-size: 1.12em; }
+.note-read > :first-child { margin-top: 0; }
+.note-read p, .note-read ul, .note-read blockquote, .note-read .code { margin: 0 0 0.8em; }
+.note-read ul { list-style: none; padding: 0; }
+.note-read blockquote {
+  border-left: 2px solid var(--border-hover);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+.note-read hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
+.note-read code.inline {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--muted);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+.note-read a, .note-read .link {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--border-hover);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.note-read .done { color: var(--subtle); text-decoration: line-through; }
+
+/* The scratchpad window. */
+.scratch textarea {
+  resize: none;
+  background: transparent;
+  outline: none;
+  font-size: 14.5px;
+  line-height: 1.6;
+  user-select: text;
 }
 
 /* highlight.js token classes mapped onto the syntax palette. */

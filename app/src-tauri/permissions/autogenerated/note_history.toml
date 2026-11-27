@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-note-history"
+description = "Enables the note_history command without any pre-configured scope."
+commands.allow = ["note_history"]
+
+[[permission]]
+identifier = "deny-note-history"
+description = "Denies the note_history command without any pre-configured scope."
+commands.deny = ["note_history"]
