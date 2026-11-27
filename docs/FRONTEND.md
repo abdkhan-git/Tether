@@ -71,7 +71,9 @@ Pages use the wrappers in `components/ui.tsx` (`Card`, `PrimaryAction`, `IconBut
 
 ## Adding a feature (module)
 
-Tether is a set of modules on one synced core. The top navigation, the search flyout and the Modules page are all generated from a registry, so a new feature touches three places:
+**First decide where it lives.** Most features belong on a page that exists (Pulse on Devices, the shelf in Transfers, Handoff in Workspaces) and are built as a section or panel of it, not a module of their own: the top navigation must not grow a tab per feature (owner, 2026-11-26). A new module is for a separate activity, like Notes.
+
+Tether is a set of modules on one synced core. The top navigation, the search flyout and the Modules page are all generated from a registry, so a new module touches three places:
 
 1. **Operation type.** Add the variant to `OpKind` in `crates/tether-core/src/op.rs`, with its merge rule, and extend the simulator's invariants (CLAUDE.md: every sync change keeps the simulator green).
 2. **Module file.** Create `app/src/modules/<name>.tsx` exporting a `TetherModule`:

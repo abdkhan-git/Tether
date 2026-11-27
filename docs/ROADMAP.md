@@ -50,7 +50,7 @@ Smaller modules on the same core: **Vault** (move `.env` files and API keys, aut
 
 ## What you can do in the app
 
-Each feature is something the user does in the Tether window or tray, not only something to look at. Status as of 2026-11-23.
+Each feature is something the user does in the Tether window or tray, not only something to look at. **Features join the page they belong to; they do not each get a tab** (decided with the owner 2026-11-26): a new top-level tab only for a separate activity, as Notes is. Each feature's plan names its home page first. Status as of 2026-11-23.
 
 | Area | What the user does | Feature | Status |
 | --- | --- | --- | --- |
@@ -60,7 +60,7 @@ Each feature is something the user does in the Tether window or tray, not only s
 | Devices | Pair with a six-digit code, rename, revoke, see live round-trip time | P0/P1 | Done |
 | Tray | Pause sync, open at sign-in, notifications | P1 | Done |
 | Notes | Write notes that merge live across devices, offline included; Markdown and checklists; notebooks, pins, trash; history and restore; who wrote what; floating scratchpad (Alt+Shift+N) | F11 | Done (single machine; the two-machine check waits for the laptop) |
-| Pulse | See every computer's health and activity; wake a sleeping one | F10 | Planned (P3) |
+| Devices (Pulse) | Each device's health and activity on its Devices card (CPU, memory, storage, battery, uptime, how it is connected); wake a sleeping one; a one-line summary on the Overview. Not a tab of its own | F10 | Next (P3) |
 | Shelf | Drag anything onto the shelf; drag it out on another computer | F4 | Planned (P3) |
 | Compute | Run a supported job on the best device; watch it; cancel | F8 | Planned (P3) |
 | Desk | One keyboard and mouse across both screens | F2 | Planned (P4, needs both machines side by side) |

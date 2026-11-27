@@ -10,15 +10,6 @@ import type { TetherModule } from "./types";
  */
 export const plannedModules: TetherModule[] = [
   {
-    id: "pulse",
-    label: "Pulse",
-    icon: icons.pulse,
-    group: "Network",
-    summary: "Every computer's health at a glance: online, CPU, memory, storage, battery, jobs. Wake a sleeping one.",
-    status: "planned",
-    note: "Roadmap · P3",
-  },
-  {
     id: "compute",
     label: "Compute",
     icon: icons.flash,
