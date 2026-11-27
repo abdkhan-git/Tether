@@ -79,6 +79,17 @@ Not done yet:
 - Not tested between two physical machines or with the real clipboard on two OSes.
 - The UI is not connected to the daemon (P1); no Tauri shell, no `tether` CLI, no file send.
 
+## Later decisions (2026-11-26)
+
+- **Features join existing pages; no tab per feature.** Pulse lives on Devices, Drop in Files (today's Transfers), Handoff in Workspaces; a new top-level tab only for a separate activity (Notes).
+- **Notes (F11)** use a Fugue CRDT between devices and operational transformation between an editor and its daemon; the scratchpad is one note every group shares from the start.
+- **Pulse (F10):** heartbeats as QUIC datagrams, never in the log; a phi-accrual failure detector; Wake-on-LAN only to addresses a member reported about itself.
+- **Drop (F4), decided with the owner:** items up to 64 MB fetched ahead, bigger ones when taken; unpinned items leave after 7 days; taken-out files go to Downloads\\Tether with the Mark of the Web; the bytes never enter the log.
+
+## Build status (2026-11-26)
+
+This section supersedes the one above. P0 and P1 steps 1 to 6 are done (P1 steps 7 and 8, the two-machine check, wait for the laptop). Since then: pins and deletes, open at sign-in, the quick wins (rename devices, notifications, send to one device, quick paste palette), **F11 Notes** (Notes page and floating scratchpad), **F10 Pulse** (device health, failure detection and Wake-on-LAN on the Devices page), and **F4 Drop milestone 1** (shelf operations and simulator oracle). 203 Rust and 74 frontend tests; 10,000 simulator seeds green with notes, lagging editors and the shelf. Everything is verified on one Windows machine only; [HANDOFF.md](HANDOFF.md) has the details, the measurements and what is next.
+
 ## Environment notes
 
 - Rust 1.100 stable and Visual Studio 2022 Build Tools (C++ workload) were installed on 2026-11-23.

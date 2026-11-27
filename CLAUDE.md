@@ -4,7 +4,7 @@ Peer-to-peer, end-to-end encrypted sync for clipboard, files and workspaces acro
 
 ## Continuing work
 
-When the owner says "let's continue" (or starts a new session without a specific task), read [docs/HANDOFF.md](docs/HANDOFF.md) first. It holds the current state, the next unchecked step, open decisions and the working agreements. Check it against the code (`git log`, the files it names) before acting. At the end of every task or session, update HANDOFF.md: tick finished steps, rewrite "Current state" and "Next up", add a session-log line. The owner runs git: give commands, never commit, no Claude attribution.
+When the owner says "let's continue" (or starts a new session without a specific task), read [docs/HANDOFF.md](docs/HANDOFF.md) first; its "Current state" says where to start (as of 2026-11-26: **F4 Drop, milestone 2**, the daemon side of the shared shelf, planned in [docs/drop-design.md](docs/drop-design.md)). It holds the current state, the next unchecked step, open decisions and the working agreements. Check it against the code (`git log`, the files it names) before acting. At the end of every task or session, update HANDOFF.md: tick finished steps, rewrite "Current state" and "Next up", add a session-log line. The owner runs git: give commands, never commit, no Claude attribution.
 
 ## Work that needs a second device
 
@@ -24,18 +24,19 @@ Before planning or changing anything, read:
 - [docs/DESIGN.md](docs/DESIGN.md): the full design doc (architecture, sync protocol, security, roadmap).
 - [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md): why this project exists, what the owner is optimizing for (big-tech offer; latency, race conditions, correctness), ideas rejected, key decisions, and current build status.
 - [docs/SECURITY.md](docs/SECURITY.md): threat model, the rules every change must follow, the capability model, and known open vulnerabilities. Security is a hard requirement from the owner.
-- [docs/ROADMAP.md](docs/ROADMAP.md): the flagship features (F1 to F10), how each stays safe, and the phase order (P0 security foundation first).
+- [docs/ROADMAP.md](docs/ROADMAP.md): the flagship features (F1 to F15), how each stays safe, the phase order, and the in-app feature map (which page each feature lives on).
+- Feature design notes: [docs/notes-design.md](docs/notes-design.md) (F11 Notes: Fugue CRDT, editors and OT), [docs/drop-design.md](docs/drop-design.md) (F4 Drop: shelf, chunks, the owner's decisions).
 
 ## Layout
 
-- `crates/tether-core`: no-I/O core (DeviceId, HLC, Op, OpLog, wire Message). Keep it free of I/O so the simulator can run it.
+- `crates/tether-core`: no-I/O core (DeviceId, HLC, Op, OpLog, wire Message, notes CRDT and deltas, Pulse detector, shelf). Keep it free of I/O so the simulator can run it.
 - `crates/tether-daemon`: `tetherd` binary (mDNS, QUIC via quinn, clipboard).
 - `crates/tether-sim`: deterministic simulator and convergence invariants.
 - `crates/tether-os`: OS integration, the only crate allowed `unsafe` (every block has a `// SAFETY:` comment, enforced by clippy). Holds the owner-only local channel (named pipe / Unix socket) and clipboard change detection plus app privacy marks (`clipboard`). Tests that touch the real clipboard are `#[ignore]`d; run them by hand with `-- --ignored`.
 - `crates/tether-ipc`: the local control protocol (frames, mutual token handshake, requests/replies/events, client) used by the daemon, the CLI and the desktop app.
 - `crates/tether-cli`: the `tether` command (status, devices, history, watch, pair, join, revoke). A client of the control channel only; everything it prints from the daemon goes through `term::safe` (no terminal escapes).
 - `app/src-tauri`: the `tether-app` crate, the Tauri 2 shell (window, tray). A thin client of the control channel; the page may call only the commands listed in `build.rs` and granted in `capabilities/main.json`, and the window refuses to navigate anywhere but the bundled page. Starts `tetherd --managed` from beside its own executable when no daemon answers.
-- `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion). Live data from the daemon inside the app, sample data in a plain browser. Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
+- `app`: desktop UI (React + TypeScript + Tailwind v4 + Motion). Pages today: Overview, Clipboard, Notes, Transfers (becoming Files), Workspaces, Devices (with Pulse and the old Diagnostics as "Sync details"); windows: main, quick paste palette (Alt+Shift+V), scratchpad (Alt+Shift+N). Live data from the daemon inside the app, sample data in a plain browser. Features are modules in `app/src/modules/`, registered in `registry.ts`. Read [docs/FRONTEND.md](docs/FRONTEND.md) before touching it: it has the design language (neutral graphite, Apple-like; colour only as a status signal; no gold, purple or blue; no sidebar), the content-aware clipboard engine (`app/src/lib/content/`, unit-tested), platform awareness (owner is on Windows: Ctrl shortcuts, File Explorer wording), the vendored React Bits / Magic UI components, and how to add a module.
 
 ## Commands
 
@@ -53,6 +54,8 @@ cd app && npm run app:build                          # release app and installer
 ```
 
 ## Conventions
+
+- **No tab per feature.** New features join an existing page (Pulse lives on Devices; Drop goes in Files, today's Transfers); a new top-level tab only for a separate activity, like Notes. Say which page a feature lives on before building it.
 
 - Follow the rules in docs/SECURITY.md on every change: authenticate before serving anything, verify signed operations, never execute received content, gate powerful features behind capabilities that are off by default and confirmed on the affected device, bound every input, no `unsafe` outside the OS-integration crate, never log secrets. New features need a threat model (template in SECURITY.md) and a test or invariant for their security property.
 - Every change to sync logic must keep the simulator green; add an invariant or fault when adding a feature.
